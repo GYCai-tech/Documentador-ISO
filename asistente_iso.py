@@ -200,7 +200,7 @@ def build_rag_index() -> list[dict]:
     with open(INDEX_FILE, "w", encoding="utf-8") as f:
         json.dump(index, f, ensure_ascii=False)
 
-    print(f"[RAG] Índice guardado: {len(index)} chunks → {INDEX_FILE}\n")
+    print(f"[RAG] Indice guardado: {len(index)} chunks -> {INDEX_FILE}\n")
     return index
 
 
@@ -567,7 +567,7 @@ def generate_docx(data: dict) -> None:
 
     try:
         out_path = generar_ficha(tmp.name)
-        print(f"✅  Documento generado: {out_path}\n")
+        print(f"[OK] Documento generado: {out_path}\n")
     finally:
         os.unlink(tmp.name)
 
