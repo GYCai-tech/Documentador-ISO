@@ -17,9 +17,8 @@ from docx.enum.table import WD_ALIGN_VERTICAL
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
-HERE      = os.path.dirname(os.path.abspath(__file__))
-LOGO_PATH = os.path.join(HERE, "pc02_unpacked", "word", "media", "image3.png")
-TEMPLATE  = os.path.join(HERE, "pc02_template.docx")
+HERE     = os.path.dirname(os.path.abspath(__file__))
+TEMPLATE = os.path.join(HERE, "pc02_template.docx")
 
 AZUL  = "95B3D7"
 VERDE = "E9EFB1"
@@ -140,14 +139,7 @@ def clear_cell(cell):
 
 def add_section_title(doc, text):
     p = doc.add_paragraph()
-    # Fondo verde E9EFB1 igual que en el documento de referencia
-    pPr = p._p.get_or_add_pPr()
-    shd = OxmlElement("w:shd")
-    shd.set(qn("w:val"),   "clear")
-    shd.set(qn("w:color"), "auto")
-    shd.set(qn("w:fill"),  VERDE)
-    pPr.append(shd)
-    add_run(p, text, size_pt=11, bold=True)
+    add_run(p, text, size_pt=12, bold=True)
     set_spacing(p, before=120, after=60)
     return p
 

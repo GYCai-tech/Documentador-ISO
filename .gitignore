@@ -13,6 +13,11 @@ tmp*.png
 # Base de conocimiento (documentos internos — no subir al repo)
 BC/
 
+# Archivos generados en runtime
+historial.json
+rag_index.json
+pc02_unpacked/
+
 # Credenciales GCP — NUNCA commitear
 credentials.json
 *.json.key
