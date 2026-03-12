@@ -1,0 +1,97 @@
+{
+  "codigo": "PC-04",
+  "nombre": "PRODUCCIÓN Y PRESTACIÓN DEL SERVICIO",
+  "fecha": "30/06/25",
+  "revision": "00",
+  "paginas": 5,
+  "elaborado_por": "Responsable de Calidad y Medio Ambiente",
+  "aprobado_por": "Gerencia",
+
+  "historial": [
+    {
+      "rev": "00",
+      "fecha": "30/06/25",
+      "descripcion": "Nuevo lanzamiento documental en revisión 00",
+      "revisado": "",
+      "elaborado": ""
+    }
+  ],
+
+  "objeto": "Definir y controlar el proceso de producción y prestación del servicio en GÓMEZ Y CRESPO, asegurando que las actividades se llevan a cabo bajo condiciones controladas que garanticen la conformidad del producto/servicio con los requisitos establecidos.",
+
+  "alcance": "Este procedimiento es aplicable a todas las actividades de producción y prestación de servicio realizadas por GÓMEZ Y CRESPO, desde la recepción del pedido hasta la entrega al cliente.",
+
+  "responsabilidades": [
+    {
+      "cargo": "Gerencia",
+      "tareas": [
+        "Aprobar la planificación de la producción.",
+        "Asegurar la disponibilidad de recursos necesarios."
+      ]
+    },
+    {
+      "cargo": "Responsable de Producción",
+      "tareas": [
+        "Planificar y supervisar las actividades de producción.",
+        "Garantizar el cumplimiento de los requisitos técnicos y de calidad.",
+        "Registrar las incidencias y no conformidades detectadas durante el proceso."
+      ]
+    },
+    {
+      "cargo": "Departamento Técnico",
+      "tareas": [
+        "Proporcionar soporte técnico durante la ejecución del servicio.",
+        "Verificar que los medios y equipos son adecuados para la producción."
+      ]
+    }
+  ],
+
+  "desarrollo": [
+    {
+      "num": "4.1.",
+      "titulo": "Planificación de la Producción",
+      "descripcion": "Una vez confirmado el pedido, el Responsable de Producción planifica las actividades a realizar, asignando los recursos humanos y materiales necesarios. La planificación queda registrada en el ERP de la organización."
+    },
+    {
+      "num": "4.2.",
+      "titulo": "Ejecución del Servicio",
+      "descripcion": "Las actividades de producción se llevan a cabo conforme a las especificaciones técnicas del pedido. Durante la ejecución se realizan controles intermedios para verificar el cumplimiento de los requisitos. Cualquier desviación se registra como No Conformidad (Anexo 1, P-11)."
+    },
+    {
+      "num": "4.3.",
+      "titulo": "Entrega y Cierre",
+      "descripcion": "Finalizado el servicio, el Responsable de Producción verifica la conformidad del resultado con los requisitos del cliente. Se genera el albarán de entrega y se actualiza el estado del pedido en el ERP. El cliente firma la conformidad de la entrega."
+    }
+  ],
+
+  "archivo": [
+    {
+      "documento": "Orden de Producción",
+      "responsable": "Responsable de Producción",
+      "lugar": "Oficinas de GÓMEZ Y CRESPO"
+    },
+    {
+      "documento": "Albarán de Entrega",
+      "responsable": "Responsable de Producción",
+      "lugar": "Oficinas de GÓMEZ Y CRESPO"
+    },
+    {
+      "documento": "Registro de Incidencias",
+      "responsable": "Responsable de Calidad",
+      "lugar": "Oficinas de GÓMEZ Y CRESPO"
+    }
+  ],
+
+  "referencias": [
+    "PC-02: «Procesos Relacionados con los Clientes»",
+    "PC-03: «Gestión de Compras»",
+    "P-10: «Seguimiento y Medición»",
+    "P-11: «Control del Producto No Conforme»"
+  ],
+
+  "anexos": [
+    "Anexo 1, PC-04: Registro de Control de Producción"
+  ],
+
+  "diagrama_mermaid": "flowchart TD\n    A([Inicio]) --> B[Recepción del pedido confirmado]\n    B --> C[Responsable de Producción:\\nPlanificación y asignación de recursos]\n    C --> D[Ejecución del servicio\\nconforme a especificaciones técnicas]\n    D --> E{¿Control intermedio\\nconforme?}\n    E -- Sí --> F[Responsable de Producción:\\nVerificación final del resultado]\n    E -- No --> G[Registro de No Conformidad\\nAnexo 1 - P-11]\n    G --> D\n    F --> H{¿Resultado conforme\\ncon requisitos del cliente?}\n    H -- Sí --> I[Generación del albarán\\nde entrega y actualización ERP]\n    H -- No --> G\n    I --> J[Cliente firma\\nconformidad de entrega]\n    J --> K([Fin])"
+}

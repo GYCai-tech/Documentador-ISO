@@ -1,0 +1,18 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.git/
+.gitignore
+
+# Ficheros generados (outputs del asistente)
+PC-*.docx
+PC-*.doc
+*.tmp
+tmp*.png
+
+# Credenciales — nunca en la imagen
+credentials.json
+*.json.key
+service_account*.json

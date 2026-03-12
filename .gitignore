@@ -1,0 +1,16 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Ficheros generados (outputs del asistente)
+PC-*.docx
+PC-*.doc
+tmp*.png
+*.tmp
+
+# Credenciales GCP — NUNCA commitear
+credentials.json
+*.json.key
+service_account*.json
