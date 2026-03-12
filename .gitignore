@@ -10,6 +10,9 @@ PC-*.doc
 tmp*.png
 *.tmp
 
+# Base de conocimiento (documentos internos — no subir al repo)
+BC/
+
 # Credenciales GCP — NUNCA commitear
 credentials.json
 *.json.key
