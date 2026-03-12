@@ -40,6 +40,8 @@ st.markdown("""
 
 /* ── Estructura base ── */
 #MainMenu, footer, header, .stDeployButton { visibility: hidden; display: none; }
+[data-testid="stSidebarCollapsedControl"],
+[data-testid="stSidebarCollapseButton"] { visibility: visible !important; display: flex !important; }
 .stApp { background: var(--bg); }
 .main .block-container {
     max-width: 920px;
