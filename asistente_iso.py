@@ -220,7 +220,7 @@ def retrieve_context(query: str, index: list[dict], top_k: int = 6) -> str:
 # FASE 1 — GEMINI FLASH: entrevista iterativa (barato)
 # ──────────────────────────────────────────────────────────────────────────────
 
-_GEMINI_SYSTEM = """\
+INTERVIEW_SYSTEM = """\
 Eres un consultor experto en calidad ISO que ayuda a documentar procedimientos para
 GÓMEZ Y CRESPO S.A. (fabricante de equipamiento agroganadero, ISO 9001 e ISO 14001,
 ERP/CRM: AHORA, sede en Ourense). Conoces la empresa y sus procesos.
@@ -257,7 +257,7 @@ def init_interview(topic: str) -> tuple[ChatSession, list[dict]]:
     """Inicia la sesión de entrevista con Gemini Flash."""
     model = GenerativeModel(
         CHAT_MODEL,
-        system_instruction=_GEMINI_SYSTEM,
+        system_instruction=INTERVIEW_SYSTEM,
         generation_config=CHAT_CONFIG,
     )
     chat = model.start_chat()
@@ -274,7 +274,7 @@ def init_interview(topic: str) -> tuple[ChatSession, list[dict]]:
 # FASE 2 — CLAUDE HAIKU: redacción ISO de calidad (un único llamado)
 # ──────────────────────────────────────────────────────────────────────────────
 
-_CLAUDE_SYSTEM = """\
+DRAFT_SYSTEM = """\
 Eres el Redactor Jefe de Procedimientos ISO de GÓMEZ Y CRESPO S.A., empresa española
 fabricante de equipamiento agroganadero (avicultura, cunicultura, minifundio),
 certificada ISO 9001:2015 e ISO 14001:2015, sede en Ourense.
@@ -369,7 +369,7 @@ def draft_with_gemini_pro(transcript: str, rag_context: str) -> str:
 
     model    = GenerativeModel(
         DRAFT_MODEL,
-        system_instruction=_CLAUDE_SYSTEM,
+        system_instruction=DRAFT_SYSTEM,
         generation_config=DRAFT_CONFIG,
     )
     response = model.generate_content(prompt)

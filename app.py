@@ -42,7 +42,7 @@ st.markdown("""
 #MainMenu, footer, header, .stDeployButton { visibility: hidden; display: none; }
 .stApp { background: var(--bg); }
 .main .block-container {
-    max-width: 740px;
+    max-width: 920px;
     padding: 2.5rem 2rem 4rem;
     font-family: 'IBM Plex Sans', sans-serif;
 }
@@ -151,17 +151,25 @@ st.markdown("""
 [data-testid="stChatMessage"] {
     background: var(--surface) !important;
     border: 1px solid var(--border) !important;
-    border-radius: 8px !important;
-    padding: 0.75rem 1rem !important;
+    border-radius: 10px !important;
+    padding: 1rem 1.25rem !important;
+    margin-bottom: 0.5rem !important;
 }
-[data-testid="stChatMessage"] p {
+[data-testid="stChatMessage"] p,
+[data-testid="stChatMessage"] li,
+[data-testid="stChatMessage"] span {
     color: var(--text) !important;
-    font-size: 0.9rem !important;
-    line-height: 1.65 !important;
+    font-size: 0.95rem !important;
+    line-height: 1.75 !important;
 }
-[data-testid="stChatMessage"][data-testid*="user"] {
-    border-color: var(--primary) !important;
-    border-left-width: 2px !important;
+/* Mensaje del asistente: acento izquierdo verde */
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-assistant"]) {
+    border-left: 3px solid var(--accent) !important;
+    background: #161b2a !important;
+}
+/* Mensaje del usuario: acento izquierdo azul */
+[data-testid="stChatMessage"]:has([data-testid="chatAvatarIcon-user"]) {
+    border-left: 3px solid var(--primary) !important;
 }
 
 /* ── Input de chat ── */
@@ -281,6 +289,20 @@ hr { border-color: var(--border) !important; }
     padding-bottom: 0.4rem;
     border-bottom: 1px solid var(--border);
 }
+/* ── Textarea de prompts en sidebar ── */
+[data-testid="stSidebar"] textarea {
+    background: var(--bg) !important;
+    border: 1px solid var(--border-hi) !important;
+    border-radius: 5px !important;
+    color: var(--text) !important;
+    font-family: 'IBM Plex Mono', monospace !important;
+    font-size: 0.72rem !important;
+    line-height: 1.6 !important;
+}
+[data-testid="stSidebar"] textarea:focus {
+    border-color: var(--primary) !important;
+}
+
 .sidebar-model-tag {
     font-family: 'IBM Plex Mono', monospace;
     font-size: 0.65rem;
@@ -294,6 +316,12 @@ hr { border-color: var(--border) !important; }
 }
 </style>
 """, unsafe_allow_html=True)
+
+
+# ── Prompts por defecto (importados del módulo) ────────────────────
+def _default_prompts():
+    import asistente_iso
+    return asistente_iso.INTERVIEW_SYSTEM, asistente_iso.DRAFT_SYSTEM
 
 
 # ── Session state ──────────────────────────────────────────────────
@@ -316,10 +344,19 @@ _DEFAULTS = {
     "pro_top_k":          20,
     "pro_top_p":          0.85,
     "pro_max_tokens":     8192,
+    # Prompts (inicializados lazy)
+    "interview_prompt":   None,
+    "draft_prompt":       None,
 }
 for k, v in _DEFAULTS.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+# Inicialización lazy de prompts
+if st.session_state.interview_prompt is None or st.session_state.draft_prompt is None:
+    _ip, _dp = _default_prompts()
+    st.session_state.interview_prompt = _ip
+    st.session_state.draft_prompt     = _dp
 
 
 # ── Sidebar: configuración de modelos ─────────────────────────────
@@ -395,9 +432,40 @@ def render_sidebar():
                 st.session_state[k] = v
             st.rerun()
 
+        st.markdown("---")
+
+        # ── Prompts del agente ───────────────────────────────────────
+        st.markdown('<div class="sidebar-section-title">Prompts del agente</div>', unsafe_allow_html=True)
+
+        with st.expander("Entrevista · Flash"):
+            st.session_state.interview_prompt = st.text_area(
+                "interview_prompt",
+                value=st.session_state.interview_prompt,
+                height=320,
+                key="ta_interview_prompt",
+                label_visibility="collapsed",
+                help="System prompt del agente de entrevista (gemini-2.5-flash).",
+            )
+
+        with st.expander("Redacción · Pro"):
+            st.session_state.draft_prompt = st.text_area(
+                "draft_prompt",
+                value=st.session_state.draft_prompt,
+                height=320,
+                key="ta_draft_prompt",
+                label_visibility="collapsed",
+                help="System prompt del agente redactor ISO (gemini-2.5-pro).",
+            )
+
+        if st.button("Restablecer prompts", use_container_width=True, type="secondary"):
+            _ip, _dp = _default_prompts()
+            st.session_state.interview_prompt = _ip
+            st.session_state.draft_prompt     = _dp
+            st.rerun()
+
 
 def apply_model_configs():
-    """Sobreescribe los GenerationConfig del módulo asistente_iso con los valores del sidebar."""
+    """Sobreescribe configs y prompts del módulo asistente_iso con los valores del sidebar."""
     import asistente_iso
     from vertexai.generative_models import GenerationConfig
 
@@ -413,11 +481,13 @@ def apply_model_configs():
         top_p=st.session_state.pro_top_p,
         max_output_tokens=int(st.session_state.pro_max_tokens),
     )
+    asistente_iso.INTERVIEW_SYSTEM = st.session_state.interview_prompt
+    asistente_iso.DRAFT_SYSTEM     = st.session_state.draft_prompt
 
 
-# ── Preview del documento ─────────────────────────────────────────
-def generate_doc_html(data: dict) -> str:
-    """Genera HTML estilizado que imita la estructura del documento GYC."""
+# ── Preview del documento (eliminada) ─────────────────────────────
+def generate_doc_html(data: dict) -> str:  # noqa: unused — mantenido por compatibilidad
+    """Legacy: generaba HTML de preview. Ya no se usa en la UI."""
     codigo = data.get("codigo", "PC-XX")
     nombre = data.get("nombre", "")
     fecha  = data.get("fecha", "")
@@ -659,182 +729,174 @@ st.markdown("""
 
 render_phases(st.session_state.fase)
 
-col_left, col_right = st.columns([1, 1], gap="large")
-
-# ── Columna derecha: preview siempre visible ───────────────────────
-with col_right:
-    render_preview()
-
 # ══════════════════════════════════════════════════════════════════
-# Columna izquierda: flujo de fases
+# Flujo de fases (columna única)
 # ══════════════════════════════════════════════════════════════════
-with col_left:
+# ── FASE 1 — INICIO ───────────────────────────────────────────
+if st.session_state.fase == "inicio":
 
-    # ── FASE 1 — INICIO ───────────────────────────────────────────
-    if st.session_state.fase == "inicio":
+    st.markdown("""
+    <div class="card card-accent-left">
+      <div class="card-label">Instrucciones</div>
+      <div class="card-sub" style="color:#dde3f0;font-size:0.875rem;line-height:1.6">
+        Describe brevemente el procedimiento que quieres documentar.<br>
+        El asistente te guiará sección a sección mediante una entrevista
+        y generará automáticamente el documento Word con formato GYC.
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
 
-        st.markdown("""
-        <div class="card card-accent-left">
-          <div class="card-label">Instrucciones</div>
-          <div class="card-sub" style="color:#dde3f0;font-size:0.875rem;line-height:1.6">
-            Describe brevemente el procedimiento que quieres documentar.<br>
-            El asistente te guiará sección a sección mediante una entrevista
-            y generará automáticamente el documento Word con formato GYC.
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        with st.form("form_inicio", clear_on_submit=False):
-            topic = st.text_input(
-                "Procedimiento",
-                placeholder="Ej: gestión de reclamaciones de clientes",
-                label_visibility="visible",
-            )
-            col_a, col_b = st.columns([3, 1])
-            with col_b:
-                submit = st.form_submit_button("Comenzar →", type="primary", use_container_width=True)
-
-        if submit and topic.strip():
-            with st.spinner("Inicializando modelos y contexto RAG..."):
-                from asistente_iso import retrieve_context, init_interview
-                apply_model_configs()
-                rag_index   = get_rag_index()
-                rag_context = retrieve_context(topic.strip(), rag_index)
-                chat, log   = init_interview(topic.strip())
-
-            st.session_state.update({
-                "fase":        "entrevista",
-                "topic":       topic.strip(),
-                "rag_context": rag_context,
-                "chat":        chat,
-                "log":         log,
-                "mensajes":    [{"role": "assistant", "content": log[-1]["text"]}],
-            })
-            st.rerun()
-
-        elif submit:
-            st.warning("Escribe una descripción del procedimiento antes de continuar.")
-
-    # ── FASE 2 — ENTREVISTA ───────────────────────────────────────
-    elif st.session_state.fase == "entrevista":
-
-        st.markdown(
-            f'<div class="card card-accent-left">'
-            f'<div class="card-label">Procedimiento en curso</div>'
-            f'<div class="card-title">{st.session_state.topic}</div>'
-            f'</div>',
-            unsafe_allow_html=True,
+    with st.form("form_inicio", clear_on_submit=False):
+        topic = st.text_input(
+            "Procedimiento",
+            placeholder="Ej: gestión de reclamaciones de clientes",
+            label_visibility="visible",
         )
+        col_a, col_b = st.columns([3, 1])
+        with col_b:
+            submit = st.form_submit_button("Comenzar →", type="primary", use_container_width=True)
 
-        for msg in st.session_state.mensajes:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-
-        user_input = st.chat_input("Tu respuesta...")
-
-        if user_input:
-            st.session_state.mensajes.append({"role": "user", "content": user_input})
-            st.session_state.log.append({"role": "user", "text": user_input})
-
-            with st.spinner(""):
-                response = st.session_state.chat.send_message(user_input)
-                reply    = response.text
-
-            st.session_state.log.append({"role": "assistant", "text": reply})
-
-            if "RECOPILADO" in reply:
-                reply_clean = reply.replace("RECOPILADO", "").strip()
-                if reply_clean:
-                    st.session_state.mensajes.append({"role": "assistant", "content": reply_clean})
-                st.session_state.fase = "redactando"
-            else:
-                st.session_state.mensajes.append({"role": "assistant", "content": reply})
-
-            st.rerun()
-
-    # ── FASE 3 — REDACTANDO ───────────────────────────────────────
-    elif st.session_state.fase == "redactando":
-
-        for msg in st.session_state.mensajes[-3:]:
-            with st.chat_message(msg["role"]):
-                st.markdown(msg["content"])
-
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.markdown("""
-        <div class="card card-accent-left">
-          <div class="card-label">Procesando</div>
-          <div class="card-sub" style="color:#dde3f0;font-size:0.875rem">
-            Gemini Pro está redactando el procedimiento completo y generando el diagrama de flujo.
-            Esto puede tardar entre 30 y 60 segundos.
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        with st.spinner("Redactando procedimiento ISO..."):
-            from asistente_iso import draft_with_gemini_pro, extract_json, complete_with_defaults
+    if submit and topic.strip():
+        with st.spinner("Inicializando modelos y contexto RAG..."):
+            from asistente_iso import retrieve_context, init_interview
             apply_model_configs()
-            from json_a_ficha import generar_ficha
+            rag_index   = get_rag_index()
+            rag_context = retrieve_context(topic.strip(), rag_index)
+            chat, log   = init_interview(topic.strip())
 
-            transcript = "\n".join(
-                f"{'Consultor' if m['role'] == 'assistant' else 'Usuario'}: {m['text']}"
-                for m in st.session_state.log
-            )
-            draft = draft_with_gemini_pro(transcript, st.session_state.rag_context)
-            data  = extract_json(draft)
+        st.session_state.update({
+            "fase":        "entrevista",
+            "topic":       topic.strip(),
+            "rag_context": rag_context,
+            "chat":        chat,
+            "log":         log,
+            "mensajes":    [{"role": "assistant", "content": log[-1]["text"]}],
+        })
+        st.rerun()
 
-        if data:
-            data = complete_with_defaults(data)
-            tmp = tempfile.NamedTemporaryFile(
-                mode="w", suffix=".json", dir=WORKDIR,
-                delete=False, encoding="utf-8",
-            )
-            json.dump(data, tmp, ensure_ascii=False, indent=2)
-            tmp.close()
+    elif submit:
+        st.warning("Escribe una descripción del procedimiento antes de continuar.")
 
-            with st.spinner("Generando documento Word y diagrama..."):
-                doc_path = generar_ficha(tmp.name)
-            os.unlink(tmp.name)
+# ── FASE 2 — ENTREVISTA ───────────────────────────────────────
+elif st.session_state.fase == "entrevista":
 
-            st.session_state.data     = data
-            st.session_state.doc_path = doc_path
-            st.session_state.fase     = "listo"
-            st.rerun()
+    st.markdown(
+        f'<div class="card card-accent-left">'
+        f'<div class="card-label">Procedimiento en curso</div>'
+        f'<div class="card-title">{st.session_state.topic}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    for msg in st.session_state.mensajes:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    user_input = st.chat_input("Tu respuesta...")
+
+    if user_input:
+        st.session_state.mensajes.append({"role": "user", "content": user_input})
+        st.session_state.log.append({"role": "user", "text": user_input})
+
+        with st.spinner(""):
+            response = st.session_state.chat.send_message(user_input)
+            reply    = response.text
+
+        st.session_state.log.append({"role": "assistant", "text": reply})
+
+        if "RECOPILADO" in reply:
+            reply_clean = reply.replace("RECOPILADO", "").strip()
+            if reply_clean:
+                st.session_state.mensajes.append({"role": "assistant", "content": reply_clean})
+            st.session_state.fase = "redactando"
         else:
-            st.error("No se pudo extraer el JSON del borrador. Vuelve a intentarlo.")
-            st.session_state.fase = "entrevista"
+            st.session_state.mensajes.append({"role": "assistant", "content": reply})
+
+        st.rerun()
+
+# ── FASE 3 — REDACTANDO ───────────────────────────────────────
+elif st.session_state.fase == "redactando":
+
+    for msg in st.session_state.mensajes[-3:]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("""
+    <div class="card card-accent-left">
+      <div class="card-label">Procesando</div>
+      <div class="card-sub" style="color:#dde3f0;font-size:0.875rem">
+        Gemini Pro está redactando el procedimiento completo y generando el diagrama de flujo.
+        Esto puede tardar entre 30 y 60 segundos.
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    with st.spinner("Redactando procedimiento ISO..."):
+        from asistente_iso import draft_with_gemini_pro, extract_json, complete_with_defaults
+        apply_model_configs()
+        from json_a_ficha import generar_ficha
+
+        transcript = "\n".join(
+            f"{'Consultor' if m['role'] == 'assistant' else 'Usuario'}: {m['text']}"
+            for m in st.session_state.log
+        )
+        draft = draft_with_gemini_pro(transcript, st.session_state.rag_context)
+        data  = extract_json(draft)
+
+    if data:
+        data = complete_with_defaults(data)
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", dir=WORKDIR,
+            delete=False, encoding="utf-8",
+        )
+        json.dump(data, tmp, ensure_ascii=False, indent=2)
+        tmp.close()
+
+        with st.spinner("Generando documento Word y diagrama..."):
+            doc_path = generar_ficha(tmp.name)
+        os.unlink(tmp.name)
+
+        st.session_state.data     = data
+        st.session_state.doc_path = doc_path
+        st.session_state.fase     = "listo"
+        st.rerun()
+    else:
+        st.error("No se pudo extraer el JSON del borrador. Vuelve a intentarlo.")
+        st.session_state.fase = "entrevista"
+        st.rerun()
+
+# ── FASE 4 — LISTO ────────────────────────────────────────────
+elif st.session_state.fase == "listo":
+
+    doc_path = st.session_state.doc_path
+    fname    = os.path.basename(doc_path)
+
+    st.markdown(f"""
+    <div class="card card-accent-green">
+      <div class="card-label">Documento generado</div>
+      <div class="card-title">{fname}</div>
+      <div class="card-sub">
+        Incluye header/footer corporativo · índice · desarrollo · diagrama de flujo Mermaid
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        with open(doc_path, "rb") as f:
+            st.download_button(
+                label="Descargar .docx",
+                data=f,
+                file_name=fname,
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True,
+                type="primary",
+            )
+
+    with col2:
+        if st.button("Nuevo procedimiento", use_container_width=True, type="secondary"):
+            for k in list(st.session_state.keys()):
+                del st.session_state[k]
             st.rerun()
-
-    # ── FASE 4 — LISTO ────────────────────────────────────────────
-    elif st.session_state.fase == "listo":
-
-        doc_path = st.session_state.doc_path
-        fname    = os.path.basename(doc_path)
-
-        st.markdown(f"""
-        <div class="card card-accent-green">
-          <div class="card-label">Documento generado</div>
-          <div class="card-title">{fname}</div>
-          <div class="card-sub">
-            Incluye header/footer corporativo · índice · desarrollo · diagrama de flujo Mermaid
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            with open(doc_path, "rb") as f:
-                st.download_button(
-                    label="Descargar .docx",
-                    data=f,
-                    file_name=fname,
-                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
-                    type="primary",
-                )
-
-        with col2:
-            if st.button("Nuevo procedimiento", use_container_width=True, type="secondary"):
-                for k in list(st.session_state.keys()):
-                    del st.session_state[k]
-                st.rerun()
