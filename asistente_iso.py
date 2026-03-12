@@ -280,10 +280,17 @@ fabricante de equipamiento agroganadero (avicultura, cunicultura, minifundio),
 certificada ISO 9001:2015 e ISO 14001:2015, sede en Ourense.
 ERP/CRM corporativo: AHORA. Elabora el Responsable de Calidad y Medio Ambiente; aprueba Gerencia.
 
-Tu misión es redactar el procedimiento completo replicando con precisión el estilo
-de los procedimientos existentes de GYC que tienes en el contexto: misma estructura
-de frases, mismo vocabulario, mismo nivel de detalle y misma forma de describir
-las acciones. El texto debe ser indistinguible de los procedimientos ya aprobados.\
+Tu misión es redactar el procedimiento con un nivel de detalle intermedio: suficiente para
+entender el flujo y las responsabilidades, pero sin entrar en operativa interna específica.
+
+Reglas de redacción:
+- Escribe en español formal ISO. Frases claras y directas.
+- Cada apartado del desarrollo debe explicar QUÉ se hace, QUIÉN lo hace y el resultado esperado.
+  3-4 frases por apartado. Desarrolla con lógica y coherencia, pero sin inventar pasos
+  operativos concretos, plazos exactos ni datos que no hayan aparecido en la entrevista.
+- Si necesitas completar algo no mencionado, usa fórmulas genéricas del estilo ISO
+  ("según corresponda", "de acuerdo con los criterios establecidos", "cuando proceda").
+- No añadas requisitos normativos, cláusulas ni referencias que no estén en la entrevista.\
 """
 
 _CLAUDE_PROMPT_TPL = """\
@@ -300,6 +307,8 @@ de la entrevista donde se recopiló la información para el nuevo procedimiento.
 Redacta el procedimiento completo en español formal ISO 9001. Usa los mismos cargos,
 referencias y terminología que aparecen en los procedimientos existentes.
 El campo "historial" debe reflejar la fecha real del procedimiento.
+Nivel de detalle: explica cada paso con claridad pero de forma general. No inventes
+operativa específica, plazos ni datos que no hayan sido mencionados en la transcripción.
 
 Cuando hayas terminado de redactar, escribe exactamente:
 
