@@ -318,6 +318,31 @@ hr { border-color: var(--border) !important; }
 """, unsafe_allow_html=True)
 
 
+# ── Historial de procedimientos ────────────────────────────────────
+HISTORIAL_PATH = os.path.join(WORKDIR, "historial.json")
+
+def load_historial() -> list[dict]:
+    if not os.path.exists(HISTORIAL_PATH):
+        return []
+    try:
+        with open(HISTORIAL_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+def append_historial(data: dict, doc_path: str):
+    from datetime import datetime
+    historial = load_historial()
+    historial.append({
+        "codigo":           data.get("codigo", ""),
+        "nombre":           data.get("nombre", ""),
+        "fecha_generacion": datetime.now().strftime("%d/%m/%Y %H:%M"),
+        "ruta_docx":        doc_path,
+    })
+    with open(HISTORIAL_PATH, "w", encoding="utf-8") as f:
+        json.dump(historial, f, ensure_ascii=False, indent=2)
+
+
 # ── Prompts por defecto (importados del módulo) ────────────────────
 def _default_prompts():
     import asistente_iso
@@ -326,7 +351,8 @@ def _default_prompts():
 
 # ── Session state ──────────────────────────────────────────────────
 _DEFAULTS = {
-    "fase":        "inicio",   # inicio | entrevista | redactando | listo
+    "fase":        "inicio",   # inicio | entrevista | redactando | revision_chat | revision_redactando | listo
+    "modo":        "nuevo",    # "nuevo" | "revision"
     "mensajes":    [],
     "chat":        None,
     "log":         [],
@@ -334,6 +360,11 @@ _DEFAULTS = {
     "doc_path":    None,
     "topic":       "",
     "data":        None,   # JSON del procedimiento generado por Gemini Pro
+    # Modo revisión
+    "docx_original_text": "",
+    "revision_mensajes":  [],
+    "revision_chat":      None,
+    "revision_log":       [],
     # Parámetros Flash (entrevista)
     "flash_temperature":  0.7,
     "flash_top_k":        40,
@@ -462,6 +493,37 @@ def render_sidebar():
             st.session_state.interview_prompt = _ip
             st.session_state.draft_prompt     = _dp
             st.rerun()
+
+        st.markdown("---")
+
+        # ── Historial ───────────────────────────────────────────────
+        st.markdown('<div class="sidebar-section-title">Historial</div>', unsafe_allow_html=True)
+
+        entries = load_historial()
+        if not entries:
+            st.markdown(
+                '<div style="font-size:0.75rem;color:#5a6484">Sin procedimientos generados aún.</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            for entry in reversed(entries):
+                fname = os.path.basename(entry["ruta_docx"])
+                label = f"{entry['codigo']} · {entry['fecha_generacion']}"
+                if os.path.exists(entry["ruta_docx"]):
+                    with open(entry["ruta_docx"], "rb") as fh:
+                        st.download_button(
+                            label=label,
+                            data=fh,
+                            file_name=fname,
+                            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                            key=f"hist_{entry['ruta_docx']}",
+                            use_container_width=True,
+                        )
+                else:
+                    st.markdown(
+                        f'<div style="font-size:0.72rem;color:#5a6484">{label} (no encontrado)</div>',
+                        unsafe_allow_html=True,
+                    )
 
 
 def apply_model_configs():
@@ -693,9 +755,13 @@ def get_rag_index():
 
 # ── Helper: barra de progreso de fases ────────────────────────────
 def render_phases(fase_actual: str):
-    fases  = ["inicio", "entrevista", "redactando", "listo"]
-    labels = ["Inicio", "Entrevista", "Redacción", "Descarga"]
-    idx    = fases.index(fase_actual)
+    if st.session_state.get("modo") == "revision":
+        fases  = ["inicio", "revision_chat", "revision_redactando", "listo"]
+        labels = ["Inicio", "Cambios", "Redacción", "Descarga"]
+    else:
+        fases  = ["inicio", "entrevista", "redactando", "listo"]
+        labels = ["Inicio", "Entrevista", "Redacción", "Descarga"]
+    idx = fases.index(fase_actual) if fase_actual in fases else 0
 
     segs = "".join(
         f'<div class="phase-seg {"done" if i < idx else "active" if i == idx else ""}"></div>'
@@ -735,47 +801,92 @@ render_phases(st.session_state.fase)
 # ── FASE 1 — INICIO ───────────────────────────────────────────
 if st.session_state.fase == "inicio":
 
-    st.markdown("""
-    <div class="card card-accent-left">
-      <div class="card-label">Instrucciones</div>
-      <div class="card-sub" style="color:#dde3f0;font-size:0.875rem;line-height:1.6">
-        Describe brevemente el procedimiento que quieres documentar.<br>
-        El asistente te guiará sección a sección mediante una entrevista
-        y generará automáticamente el documento Word con formato GYC.
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+    modo_sel = st.radio(
+        "modo",
+        options=["Crear nuevo procedimiento", "Revisar procedimiento existente"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
 
-    with st.form("form_inicio", clear_on_submit=False):
-        topic = st.text_input(
-            "Procedimiento",
-            placeholder="Ej: gestión de reclamaciones de clientes",
-            label_visibility="visible",
-        )
-        col_a, col_b = st.columns([3, 1])
-        with col_b:
-            submit = st.form_submit_button("Comenzar →", type="primary", use_container_width=True)
+    if modo_sel == "Crear nuevo procedimiento":
+        st.markdown("""
+        <div class="card card-accent-left">
+          <div class="card-label">Instrucciones</div>
+          <div class="card-sub" style="color:#dde3f0;font-size:0.875rem;line-height:1.6">
+            Describe brevemente el procedimiento que quieres documentar.<br>
+            El asistente te guiará sección a sección mediante una entrevista
+            y generará automáticamente el documento Word con formato GYC.
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    if submit and topic.strip():
-        with st.spinner("Inicializando modelos y contexto RAG..."):
-            from asistente_iso import retrieve_context, init_interview
-            apply_model_configs()
-            rag_index   = get_rag_index()
-            rag_context = retrieve_context(topic.strip(), rag_index)
-            chat, log   = init_interview(topic.strip())
+        with st.form("form_inicio", clear_on_submit=False):
+            topic = st.text_input(
+                "Procedimiento",
+                placeholder="Ej: gestión de reclamaciones de clientes",
+                label_visibility="visible",
+            )
+            col_a, col_b = st.columns([3, 1])
+            with col_b:
+                submit = st.form_submit_button("Comenzar →", type="primary", use_container_width=True)
 
-        st.session_state.update({
-            "fase":        "entrevista",
-            "topic":       topic.strip(),
-            "rag_context": rag_context,
-            "chat":        chat,
-            "log":         log,
-            "mensajes":    [{"role": "assistant", "content": log[-1]["text"]}],
-        })
-        st.rerun()
+        if submit and topic.strip():
+            with st.spinner("Inicializando modelos y contexto RAG..."):
+                from asistente_iso import retrieve_context, init_interview
+                apply_model_configs()
+                rag_index   = get_rag_index()
+                rag_context = retrieve_context(topic.strip(), rag_index)
+                chat, log   = init_interview(topic.strip())
 
-    elif submit:
-        st.warning("Escribe una descripción del procedimiento antes de continuar.")
+            st.session_state.update({
+                "fase":        "entrevista",
+                "modo":        "nuevo",
+                "topic":       topic.strip(),
+                "rag_context": rag_context,
+                "chat":        chat,
+                "log":         log,
+                "mensajes":    [{"role": "assistant", "content": log[-1]["text"]}],
+            })
+            st.rerun()
+
+        elif submit:
+            st.warning("Escribe una descripción del procedimiento antes de continuar.")
+
+    else:  # Revisar procedimiento existente
+        st.markdown("""
+        <div class="card card-accent-left">
+          <div class="card-label">Revisión de procedimiento</div>
+          <div class="card-sub" style="color:#dde3f0;font-size:0.875rem;line-height:1.6">
+            Sube el .docx del procedimiento existente. El asistente lo leerá
+            y te guiará para introducir los cambios de la nueva revisión.
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        uploaded = st.file_uploader("Procedimiento .docx a revisar", type=["docx"])
+
+        if uploaded:
+            col_a, col_b = st.columns([3, 1])
+            with col_b:
+                if st.button("Iniciar revisión →", type="primary", use_container_width=True):
+                    with st.spinner("Leyendo procedimiento y cargando contexto RAG..."):
+                        from asistente_iso import extract_text_from_docx_bytes, retrieve_context, init_revision_chat
+                        apply_model_configs()
+                        docx_text   = extract_text_from_docx_bytes(uploaded.read())
+                        rag_index   = get_rag_index()
+                        rag_context = retrieve_context("revisión de procedimiento existente", rag_index)
+                        chat, log   = init_revision_chat(docx_text)
+
+                    st.session_state.update({
+                        "fase":               "revision_chat",
+                        "modo":               "revision",
+                        "docx_original_text": docx_text,
+                        "rag_context":        rag_context,
+                        "revision_chat":      chat,
+                        "revision_log":       log,
+                        "revision_mensajes":  [{"role": "assistant", "content": log[-1]["text"]}],
+                    })
+                    st.rerun()
 
 # ── FASE 2 — ENTREVISTA ───────────────────────────────────────
 elif st.session_state.fase == "entrevista":
@@ -812,6 +923,97 @@ elif st.session_state.fase == "entrevista":
         else:
             st.session_state.mensajes.append({"role": "assistant", "content": reply})
 
+        st.rerun()
+
+# ── FASE REVISIÓN — CHAT DE CAMBIOS ───────────────────────────
+elif st.session_state.fase == "revision_chat":
+
+    st.markdown(
+        '<div class="card card-accent-left">'
+        '<div class="card-label">Revisión en curso</div>'
+        '<div class="card-sub" style="color:#dde3f0;font-size:0.875rem">'
+        'Describe los cambios que quieres introducir. El asistente los confirmará sección a sección.'
+        '</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    for msg in st.session_state.revision_mensajes:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    user_input = st.chat_input("Describe los cambios...")
+
+    if user_input:
+        st.session_state.revision_mensajes.append({"role": "user", "content": user_input})
+        st.session_state.revision_log.append({"role": "user", "text": user_input})
+
+        with st.spinner(""):
+            response = st.session_state.revision_chat.send_message(user_input)
+            reply    = response.text
+
+        st.session_state.revision_log.append({"role": "assistant", "text": reply})
+
+        if "CAMBIOS_RECOPILADOS" in reply:
+            reply_clean = reply.replace("CAMBIOS_RECOPILADOS", "").strip()
+            if reply_clean:
+                st.session_state.revision_mensajes.append({"role": "assistant", "content": reply_clean})
+            st.session_state.fase = "revision_redactando"
+        else:
+            st.session_state.revision_mensajes.append({"role": "assistant", "content": reply})
+
+        st.rerun()
+
+# ── FASE REVISIÓN — REDACTANDO ─────────────────────────────────
+elif st.session_state.fase == "revision_redactando":
+
+    for msg in st.session_state.revision_mensajes[-3:]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("""
+    <div class="card card-accent-left">
+      <div class="card-label">Procesando revisión</div>
+      <div class="card-sub" style="color:#dde3f0;font-size:0.875rem">
+        Gemini Pro está aplicando los cambios acordados y generando la nueva revisión del procedimiento.
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    with st.spinner("Generando procedimiento revisado..."):
+        from asistente_iso import draft_revision_with_gemini_pro, extract_json, complete_with_defaults
+        apply_model_configs()
+        from json_a_ficha import generar_ficha
+
+        transcript = "\n".join(
+            f"{'Consultor' if m['role'] == 'assistant' else 'Usuario'}: {m['text']}"
+            for m in st.session_state.revision_log
+        )
+        draft = draft_revision_with_gemini_pro(
+            transcript,
+            st.session_state.docx_original_text,
+            st.session_state.rag_context,
+        )
+        data = extract_json(draft)
+
+    if data:
+        data = complete_with_defaults(data)
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", dir=WORKDIR, delete=False, encoding="utf-8",
+        )
+        json.dump(data, tmp, ensure_ascii=False, indent=2)
+        tmp.close()
+        with st.spinner("Generando documento Word revisado..."):
+            doc_path = generar_ficha(tmp.name)
+        os.unlink(tmp.name)
+        append_historial(data, doc_path)
+        st.session_state.data     = data
+        st.session_state.doc_path = doc_path
+        st.session_state.fase     = "listo"
+        st.rerun()
+    else:
+        st.error("No se pudo extraer el JSON. Vuelve a intentarlo.")
+        st.session_state.fase = "revision_chat"
         st.rerun()
 
 # ── FASE 3 — REDACTANDO ───────────────────────────────────────
@@ -857,6 +1059,7 @@ elif st.session_state.fase == "redactando":
             doc_path = generar_ficha(tmp.name)
         os.unlink(tmp.name)
 
+        append_historial(data, doc_path)
         st.session_state.data     = data
         st.session_state.doc_path = doc_path
         st.session_state.fase     = "listo"
@@ -900,3 +1103,62 @@ elif st.session_state.fase == "listo":
             for k in list(st.session_state.keys()):
                 del st.session_state[k]
             st.rerun()
+
+    # ── Regeneración de secciones ──────────────────────────────
+    st.markdown("---")
+    st.markdown(
+        '<div class="card-label" style="margin-bottom:1rem">Ajustar secciones</div>',
+        unsafe_allow_html=True,
+    )
+
+    SECCIONES_REGEN = {
+        "objeto":            "Objeto",
+        "alcance":           "Alcance",
+        "responsabilidades": "Responsabilidades",
+        "desarrollo":        "Desarrollo",
+        "archivo":           "Archivo",
+    }
+
+    data = st.session_state.data
+
+    for sec_key, sec_label in SECCIONES_REGEN.items():
+        with st.expander(sec_label):
+            val = data.get(sec_key, "")
+            if isinstance(val, str):
+                st.markdown(
+                    f'<div style="font-size:0.85rem;color:#dde3f0;line-height:1.6">{val}</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.json(val)
+
+            instruction = st.text_input(
+                "Indicación (opcional)",
+                placeholder="Ej: incluir referencia al sistema AHORA",
+                key=f"regen_instr_{sec_key}",
+            )
+
+            if st.button(f"Regenerar {sec_label}", key=f"btn_regen_{sec_key}", type="secondary"):
+                with st.spinner(f"Regenerando {sec_label}..."):
+                    from asistente_iso import regenerate_section
+                    apply_model_configs()
+                    new_val = regenerate_section(sec_key, data, instruction)
+
+                if new_val is not None:
+                    st.session_state.data[sec_key] = new_val
+                    tmp = tempfile.NamedTemporaryFile(
+                        mode="w", suffix=".json", dir=WORKDIR,
+                        delete=False, encoding="utf-8",
+                    )
+                    json.dump(st.session_state.data, tmp, ensure_ascii=False, indent=2)
+                    tmp.close()
+                    with st.spinner("Actualizando documento Word..."):
+                        from json_a_ficha import generar_ficha
+                        new_doc_path = generar_ficha(tmp.name)
+                    os.unlink(tmp.name)
+                    append_historial(st.session_state.data, new_doc_path)
+                    st.session_state.doc_path = new_doc_path
+                    st.success(f"{sec_label} regenerado.")
+                    st.rerun()
+                else:
+                    st.error(f"No se pudo regenerar {sec_label}. Vuelve a intentarlo.")

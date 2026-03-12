@@ -15,6 +15,7 @@ Requisitos previos:
 """
 
 import glob
+import io
 import json
 import math
 import os
@@ -422,6 +423,135 @@ def extract_json(text: str) -> dict | None:
 
 def complete_with_defaults(data: dict) -> dict:
     return {**DEFAULTS, **data}
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FEATURE 3 — REGENERACIÓN DE SECCIÓN PARCIAL
+# ──────────────────────────────────────────────────────────────────────────────
+
+_REGEN_SYSTEM = """\
+Eres el Redactor Jefe de Procedimientos ISO de GÓMEZ Y CRESPO S.A.
+Tu tarea es regenerar ÚNICAMENTE la sección indicada de un procedimiento existente,
+manteniendo coherencia con el resto del documento que se te proporciona como contexto.
+No modifiques ni devuelvas ninguna otra sección.
+Responde solo con el valor JSON de la sección pedida, sin texto adicional ni bloque de código.\
+"""
+
+_REGEN_PROMPT_TPL = """\
+Procedimiento actual completo (no modificar el resto):
+{current_json}
+
+Sección a regenerar: {section_key}
+Instrucción del usuario: {user_instruction}
+
+Devuelve únicamente el valor JSON para la clave "{section_key}".
+- objeto / alcance → string de texto
+- responsabilidades → lista de objetos {{"cargo": ..., "tareas": [...]}}
+- desarrollo → lista de objetos {{"num": ..., "titulo": ..., "descripcion": ...}}
+- archivo → lista de objetos {{"documento": ..., "responsable": ..., "lugar": ...}}
+\
+"""
+
+
+def regenerate_section(section_key: str, current_data: dict, user_instruction: str = ""):
+    """Regenera una sola sección del JSON. Devuelve el nuevo valor o None si falla."""
+    prompt = _REGEN_PROMPT_TPL.format(
+        current_json=json.dumps(current_data, ensure_ascii=False, indent=2),
+        section_key=section_key,
+        user_instruction=user_instruction or "Mejora la redacción manteniendo el contenido.",
+    )
+    model    = GenerativeModel(DRAFT_MODEL, system_instruction=_REGEN_SYSTEM,
+                               generation_config=DRAFT_CONFIG)
+    response = model.generate_content(prompt)
+    raw = response.text.strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        m = re.search(r'(\[.*\]|\{.*\}|"[^"]*")', raw, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group(1))
+            except json.JSONDecodeError:
+                pass
+    return None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# FEATURE 7 — MODO REVISIÓN DE PROCEDIMIENTO EXISTENTE
+# ──────────────────────────────────────────────────────────────────────────────
+
+def extract_text_from_docx_bytes(data: bytes) -> str:
+    """Extrae texto de un .docx recibido como bytes (desde st.file_uploader)."""
+    try:
+        doc = DocxReader(io.BytesIO(data))
+        return "\n".join(p.text.strip() for p in doc.paragraphs if p.text.strip())
+    except Exception as e:
+        print(f"  [RAG] Error extrayendo bytes docx: {e}")
+        return ""
+
+
+_REVISION_SYSTEM = """\
+Eres un consultor ISO que ayuda a revisar y actualizar procedimientos existentes
+de GÓMEZ Y CRESPO S.A. Se te proporciona el texto completo de un procedimiento.
+Tu misión es entender los cambios que el usuario quiere introducir, confirmando
+sección por sección qué debe modificarse y qué debe conservarse.
+Sé conciso y directo. Cuando hayas recopilado todos los cambios necesarios, escribe únicamente:
+
+CAMBIOS_RECOPILADOS
+
+No redactes el procedimiento revisado en el chat.\
+"""
+
+_REVISION_PROMPT_TPL = """\
+--- PROCEDIMIENTO ORIGINAL ---
+{original_text}
+
+--- PROCEDIMIENTOS DE REFERENCIA (RAG) ---
+{rag_context}
+
+--- CAMBIOS ACORDADOS EN LA REVISIÓN ---
+{transcript}
+
+--- INSTRUCCIONES ---
+Genera el procedimiento REVISADO completo en formato JSON, aplicando exactamente los cambios
+acordados. Incrementa la revisión en el historial (R00→R01, R01→R02, etc.) y añade una
+entrada describiendo los cambios aplicados. Mantén sin cambios todo lo que no haya sido
+mencionado. Nivel de detalle intermedio: claro pero sin inventar operativa específica.
+
+Cuando termines, escribe exactamente FINALIZADO y a continuación el bloque JSON.\
+"""
+
+
+def init_revision_chat(docx_text: str) -> tuple[ChatSession, list[dict]]:
+    """Inicia sesión de chat Flash para recopilar cambios sobre un procedimiento existente."""
+    model = GenerativeModel(
+        CHAT_MODEL,
+        system_instruction=_REVISION_SYSTEM,
+        generation_config=CHAT_CONFIG,
+    )
+    chat = model.start_chat()
+    log  = []
+    response = chat.send_message(
+        f"Este es el procedimiento existente que vamos a revisar:\n\n{docx_text}\n\n"
+        f"¿Qué cambios quieres introducir en esta revisión?"
+    )
+    log.append({"role": "assistant", "text": response.text})
+    return chat, log
+
+
+def draft_revision_with_gemini_pro(transcript: str, original_text: str, rag_context: str) -> str:
+    """Genera el procedimiento revisado con los cambios acordados."""
+    print("\n[Gemini Pro] Generando revisión ISO... ", end="", flush=True)
+    prompt = _REVISION_PROMPT_TPL.format(
+        original_text=original_text,
+        rag_context=rag_context or "No hay procedimientos indexados.",
+        transcript=transcript,
+    )
+    model    = GenerativeModel(DRAFT_MODEL, system_instruction=DRAFT_SYSTEM,
+                               generation_config=DRAFT_CONFIG)
+    response = model.generate_content(prompt)
+    print("OK\n")
+    return response.text
 
 
 def generate_docx(data: dict) -> None:
