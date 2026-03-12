@@ -105,12 +105,23 @@ def extract_text_from_pdf(path: str) -> str:
         return ""
 
 
+def extract_text_from_md(path: str) -> str:
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        print(f"  [RAG] No se pudo leer {os.path.basename(path)}: {e}")
+        return ""
+
+
 def extract_text(path: str) -> str:
     ext = os.path.splitext(path)[1].lower()
     if ext == ".pdf":
         return extract_text_from_pdf(path)
     if ext == ".docx":
         return extract_text_from_docx(path)
+    if ext == ".md":
+        return extract_text_from_md(path)
     return ""
 
 
@@ -142,9 +153,9 @@ def collect_files() -> list[str]:
                 and os.path.basename(f) not in EXCLUDE_FROM_RAG:
             files.append(f)
 
-    # Carpeta BC: .docx y .pdf, excluye plantillas y archivos temporales de Word
+    # Carpeta BC: .docx, .pdf y .md, excluye plantillas y archivos temporales de Word
     if os.path.isdir(BC_DIR):
-        for ext in ("*.docx", "*.pdf"):
+        for ext in ("*.docx", "*.pdf", "*.md"):
             for f in glob.glob(os.path.join(BC_DIR, ext)):
                 name = os.path.basename(f)
                 if name.startswith("~$"):          # archivo temporal de Word
