@@ -1,4 +1,5 @@
 venv/
+rag_cache/
 __pycache__/
 *.pyc
 *.pyo

@@ -24,7 +24,7 @@ import sys
 import tempfile
 
 import vertexai
-from vertexai.generative_models import GenerativeModel, ChatSession, GenerationConfig
+from vertexai.generative_models import GenerativeModel, ChatSession, GenerationConfig, ThinkingConfig
 from vertexai.language_models import TextEmbeddingModel
 from docx import Document as DocxReader
 from pypdf import PdfReader
@@ -35,6 +35,26 @@ from pypdf import PdfReader
 
 PROJECT_ID  = "documentacion-iso"  # GCP Project ID
 LOCATION    = "us-central1"
+CREDS_FILE  = os.environ.get(
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    os.path.join(os.path.expanduser("~"), "keys", "fichas-iso-creds.json"),
+)
+
+
+def _load_credentials():
+    """Carga credenciales desde el archivo propio de esta app, sin depender del ADC global."""
+    from google.oauth2.credentials import Credentials
+    from google.auth.transport.requests import Request
+    SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
+    creds = Credentials.from_authorized_user_file(CREDS_FILE, SCOPES)
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        # Guardar token actualizado en el archivo propio
+        import json as _json
+        data = _json.loads(creds.to_json())
+        with open(CREDS_FILE, "w") as f:
+            _json.dump(data, f)
+    return creds
 
 # Entrevista: Flash es barato para muchos turnos cortos
 CHAT_MODEL  = "gemini-2.5-flash"   # razonamiento y redacción colaborativa
@@ -60,6 +80,7 @@ CHAT_CONFIG = GenerationConfig(
     top_k=40,               # considera los 40 tokens más probables en cada paso
     top_p=0.95,             # nucleus sampling: masa de probabilidad acumulada
     max_output_tokens=2048,
+    thinking_config=ThinkingConfig(thinking_budget=0),  # desactivado: evita coste de thinking tokens
 )
 
 # Gemini Pro — redacción ISO final
@@ -69,11 +90,13 @@ DRAFT_CONFIG = GenerationConfig(
     top_k=20,
     top_p=0.85,
     max_output_tokens=8192,
+    thinking_config=ThinkingConfig(thinking_budget=0),  # desactivado: evita coste de thinking tokens
 )
 
 WORKDIR    = os.path.dirname(os.path.abspath(__file__))
 BC_DIR     = os.path.join(WORKDIR, "BC")
-INDEX_FILE = os.path.join(WORKDIR, "rag_index.json")
+_RAG_DIR   = os.environ.get("RAG_CACHE_DIR", WORKDIR)
+INDEX_FILE = os.path.join(_RAG_DIR, "rag_index.json")
 
 # Campos fijos de GYC — no se preguntan, se añaden automáticamente
 DEFAULTS = {
@@ -404,19 +427,56 @@ def draft_with_gemini_pro(transcript: str, rag_context: str) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 
 def extract_json(text: str) -> dict | None:
-    m = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(1))
-        except json.JSONDecodeError:
-            pass
+    """Extrae el primer objeto JSON válido del texto, contando llaves para no cortar en medio."""
 
-    m = re.search(r'(\{.*?"codigo".*?\})', text, re.DOTALL)
+    def _parse_from(s: str, start: int) -> dict | None:
+        depth = 0
+        in_string = False
+        escape = False
+        for i, ch in enumerate(s[start:], start):
+            if escape:
+                escape = False
+                continue
+            if ch == "\\" and in_string:
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(s[start : i + 1])
+                    except json.JSONDecodeError:
+                        return None
+        return None
+
+    # 1. Bloque ```json ... ```
+    m = re.search(r"```json\s*(\{)", text, re.DOTALL)
     if m:
-        try:
-            return json.loads(m.group(1))
-        except json.JSONDecodeError:
-            pass
+        result = _parse_from(text, m.start(1))
+        if result is not None:
+            return result
+
+    # 2. Cualquier { que contenga "codigo"
+    for m in re.finditer(r'\{', text):
+        candidate = text[m.start():]
+        if '"codigo"' not in candidate[:50]:
+            # buscar más adelante
+            continue
+        result = _parse_from(text, m.start())
+        if result is not None:
+            return result
+
+    # 3. Primer { del texto
+    m = re.search(r"\{", text)
+    if m:
+        return _parse_from(text, m.start())
 
     return None
 
@@ -584,7 +644,7 @@ def main() -> None:
     print("=" * 62 + "\n")
 
     # Inicializar Vertex AI
-    vertexai.init(project=PROJECT_ID, location=LOCATION)
+    vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=_load_credentials())
 
     # RAG
     index = load_or_build_index()

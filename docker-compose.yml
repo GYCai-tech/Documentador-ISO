@@ -4,12 +4,13 @@ services:
     ports:
       - "8501:8501"
     volumes:
-      # Credenciales GCP (service account JSON)
-      - ${GOOGLE_APPLICATION_CREDENTIALS}:/app/credentials.json:ro
+      # Credenciales GCP — coloca el fichero en la raíz del proyecto
+      - ./credentials.json:/app/credentials.json:ro
       # Volumen para el índice RAG generado (persiste entre reinicios)
-      - rag_data:/app/rag_index.json
+      - rag_data:/app/rag_cache
     environment:
       - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials.json
+      - RAG_CACHE_DIR=/app/rag_cache
     restart: unless-stopped
 
 volumes:

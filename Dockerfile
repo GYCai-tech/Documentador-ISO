@@ -3,6 +3,7 @@ FROM python:3.11-slim
 
 # Dependencias del sistema: Node.js, Chromium (headless para mmdc/puppeteer)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
     nodejs \
     npm \
     chromium \

@@ -531,19 +531,22 @@ def render_sidebar():
 def apply_model_configs():
     """Sobreescribe configs y prompts del módulo asistente_iso con los valores del sidebar."""
     import asistente_iso
-    from vertexai.generative_models import GenerationConfig
+    from vertexai.generative_models import GenerationConfig, ThinkingConfig
 
+    _no_thinking = ThinkingConfig(thinking_budget=0)
     asistente_iso.CHAT_CONFIG = GenerationConfig(
         temperature=st.session_state.flash_temperature,
         top_k=int(st.session_state.flash_top_k),
         top_p=st.session_state.flash_top_p,
         max_output_tokens=int(st.session_state.flash_max_tokens),
+        thinking_config=_no_thinking,
     )
     asistente_iso.DRAFT_CONFIG = GenerationConfig(
         temperature=st.session_state.pro_temperature,
         top_k=int(st.session_state.pro_top_k),
         top_p=st.session_state.pro_top_p,
         max_output_tokens=int(st.session_state.pro_max_tokens),
+        thinking_config=_no_thinking,
     )
     asistente_iso.INTERVIEW_SYSTEM = st.session_state.interview_prompt
     asistente_iso.DRAFT_SYSTEM     = st.session_state.draft_prompt
@@ -750,8 +753,8 @@ def render_preview():
 @st.cache_resource(show_spinner="Cargando índice de documentos...")
 def get_rag_index():
     import vertexai
-    from asistente_iso import PROJECT_ID, LOCATION, load_or_build_index
-    vertexai.init(project=PROJECT_ID, location=LOCATION)
+    from asistente_iso import PROJECT_ID, LOCATION, load_or_build_index, _load_credentials
+    vertexai.init(project=PROJECT_ID, location=LOCATION, credentials=_load_credentials())
     return load_or_build_index()
 
 
