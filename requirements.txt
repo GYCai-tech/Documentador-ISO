@@ -1,0 +1,10 @@
+# Dependencias del proyecto
+# Instalar con: pip install -r requirements.txt
+
+chainlit>=2.0.0
+google-genai>=1.0.0
+python-docx>=1.1.0
+pypdf>=4.0.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+langchain-text-splitters>=0.3.0

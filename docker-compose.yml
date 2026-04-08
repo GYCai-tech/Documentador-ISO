@@ -1,0 +1,18 @@
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8000"
+    volumes:
+      # Documentos de conocimiento (solo lectura)
+      - ./base-conocimiento:/app/base-conocimiento:ro
+      # Volumen para el índice RAG generado (persiste entre reinicios)
+      - rag_data:/app/rag_cache
+    environment:
+      # Pon tu clave aquí o usa un archivo .env
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - RAG_CACHE_DIR=/app/rag_cache
+    restart: unless-stopped
+
+volumes:
+  rag_data:

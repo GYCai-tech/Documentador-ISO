@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.pyc
+rag_index.json
+*.docx
+!pc02_template.docx
+.chainlit/

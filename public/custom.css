@@ -1,0 +1,16 @@
+/* GYC · Asistente ISO — estilos mínimos */
+
+/* Acento verde en el borde superior */
+#root > div > header {
+    border-bottom: 2px solid #b8d44a !important;
+}
+
+/* Fondo ligeramente más oscuro */
+body {
+    background-color: #0c0f18 !important;
+}
+
+/* Logo / título en la barra */
+header h1, header span {
+    color: #b8d44a !important;
+}
