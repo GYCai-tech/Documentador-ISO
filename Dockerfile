@@ -6,7 +6,12 @@ FROM python:3.11-slim
 # Instala dependencias del sistema si las necesitas (ej: para python-docx)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    && rm -rf /var/lib/apt/lists/*
+    nodejs \
+    npm \
+    chromium \
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g @mermaid-js/mermaid-cli \
+    && mmdc --version
 
 WORKDIR /app
 

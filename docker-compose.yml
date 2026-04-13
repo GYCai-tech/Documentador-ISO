@@ -2,16 +2,20 @@ services:
   app:
     build: .
     ports:
-      - "8080:8000"
+      - "9000:8000"
     volumes:
-      # Documentos de conocimiento (solo lectura)
-      - ./base-conocimiento:/app/base-conocimiento:ro
+      # Documentos de conocimiento (solo lectura) — share corporativo gcdc001
+      - /mnt/gcdc001-goyco/06 Recursos técnicos/IT/Documentacion-ISO/Base-conocimiento:/app/base-conocimiento:ro
+      # Carpeta de salida de documentos generados — share corporativo gcdc001
+      - /mnt/gcdc001-goyco/06 Recursos técnicos/IT/Documentacion-ISO/Documentos:/app/documentos-generados:rw
       # Volumen para el índice RAG generado (persiste entre reinicios)
       - rag_data:/app/rag_cache
     environment:
       # Pon tu clave aquí o usa un archivo .env
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
       - RAG_CACHE_DIR=/app/rag_cache
+      - OUTPUT_DIR=/app/documentos-generados
+      - PYTHONPATH=/app
     restart: unless-stopped
 
 volumes:

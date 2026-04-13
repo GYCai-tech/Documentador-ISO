@@ -574,7 +574,8 @@ def generar_ficha(json_path):
     add_referencias(doc, data)
     add_anexos(doc, data)
 
-    out = os.path.join(os.path.dirname(os.path.abspath(json_path)),
+    out_dir = os.environ.get("OUTPUT_DIR") or os.path.dirname(os.path.abspath(json_path))
+    out = os.path.join(out_dir,
                        f"{data['codigo']}_{data['nombre'][:30].replace(' ', '_')}.docx")
     doc.save(out)
     print(f"Ficha generada: {out}")

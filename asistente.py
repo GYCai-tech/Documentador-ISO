@@ -19,11 +19,11 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 load_dotenv()
 client = genai.Client(
     api_key=os.getenv("GOOGLE_API_KEY"),
-    http_options={"api_version": "v1"},
+    http_options={"api_version": "v1beta"},
 )
 
-CHAT_MODEL  = "gemini-2.0-flash"
-DRAFT_MODEL = "gemini-1.5-pro-latest"
+CHAT_MODEL  = "gemini-2.5-flash"
+DRAFT_MODEL = "gemini-2.5-pro"
 EMBED_MODEL = "gemini-embedding-001"
 
 # ── 5. System prompt (debe ir antes de las funciones que lo usan) ──────────────
@@ -73,16 +73,29 @@ Orden de secciones:
 - En el desarrollo, cada subapartado llevará un subtítulo en negrita como primera frase.
 - Durante la entrevista del Desarrollo, pregunta explícitamente:
   - si hay casos alternativos o excepciones,
-  - qué documentos o formularios internos se generan o consultan.
+  - qué documentos o formularios internos se generan o consultan,
+  - los plazos o frecuencias relevantes,
+  - los criterios de aceptación o rechazo si aplica,
+  - qué ocurre si el proceso falla o hay una incidencia.
 
 ## Comportamiento durante la entrevista
 
 - No hagas preguntas genéricas.
 - Guía la conversación sección por sección.
-- Haz una sola pregunta o bloque corto por turno.
-- Si falta información importante, pídela.
-- Si el usuario da información incompleta, propón una redacción provisional y pide confirmación.
+- En cada sección propón siempre un borrador completo antes de preguntar.
+- Haz preguntas de profundización: "¿En qué plazo?", "¿Quién valida?", "¿Qué registro queda?", "¿Hay excepciones?".
+- Si el usuario confirma sin añadir nada, pregunta al menos una cosa más antes de avanzar para asegurarte de que no falta detalle.
+- Si falta información importante, pídela con una pregunta concreta.
+- Si el usuario da información incompleta, propón una redacción provisional detallada y pide confirmación.
 - Mantén siempre la conversación en español.
+
+## Finalización
+
+Cuando todas las secciones estén confirmadas por el usuario, escribe exactamente en una línea:
+
+FINALIZADO
+
+No añadas ningún texto después de esa palabra.
 """
 
 # ── 2. RAG — extracción de texto ───────────────────────────────────────────────
@@ -105,11 +118,37 @@ def extract_text_from_pdf(path: str) -> str:
             textos.append(text)
     return "\n".join(textos)
 
+
+def extract_text_from_md(path: str) -> str:
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def extract_text_from_doc(path: str) -> str:
+    import docx2txt
+    return docx2txt.process(path) or ""
+
+
+def index_single_file(path: str, filename: str) -> list[dict]:
+    """Extrae texto, trocea y genera embeddings para un único archivo."""
+    if filename.endswith(".pdf"):
+        text = extract_text_from_pdf(path)
+    elif filename.endswith(".docx"):
+        text = extract_text_from_docx(path)
+    elif filename.endswith(".doc"):
+        text = extract_text_from_doc(path)
+    elif filename.endswith(".md"):
+        text = extract_text_from_md(path)
+    else:
+        return []
+    chunks = chunking(text)
+    return generate_embeddings(chunks, filename)
+
 # ── 3. RAG — chunking y embeddings ────────────────────────────────────────────
 
 splitter = RecursiveCharacterTextSplitter(
-    chunk_size=250,
-    chunk_overlap=40,
+    chunk_size=600,
+    chunk_overlap=80,
     separators=["\n\n", "\n", " ", ""]
 )
 
@@ -118,33 +157,44 @@ def chunking(text: str) -> list[str]:
 
 
 def embed_text(text: str) -> list[float]:
-    """Llama directamente a la REST API de Google para embeddings."""
+    """Embede un único texto (usado para queries en retrieve)."""
+    return embed_batch([text])[0]
+
+
+def embed_batch(texts: list[str], batch_size: int = 100) -> list[list[float]]:
+    """Embede una lista de textos usando batchEmbedContents (hasta 100 por llamada)."""
     api_key = os.getenv("GOOGLE_API_KEY")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{EMBED_MODEL}:embedContent?key={api_key}"
-    payload = {
-        "model": f"models/{EMBED_MODEL}",
-        "content": {"parts": [{"text": text}]}
-    }
-    for attempt in range(3):
-        response = requests.post(url, json=payload)
-        if response.status_code == 429:
-            time.sleep(2 ** attempt)  # 1s, 2s, 4s
-            continue
-        response.raise_for_status()
-        return response.json()["embedding"]["values"]
-    response.raise_for_status()
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{EMBED_MODEL}:batchEmbedContents?key={api_key}"
+    results = []
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        payload = {
+            "requests": [
+                {
+                    "model": f"models/{EMBED_MODEL}",
+                    "content": {"parts": [{"text": t}]}
+                }
+                for t in batch
+            ]
+        }
+        for attempt in range(3):
+            response = requests.post(url, json=payload)
+            if response.status_code == 429:
+                time.sleep(2 ** attempt)
+                continue
+            response.raise_for_status()
+            break
+        embeddings = response.json()["embeddings"]
+        results.extend(e["values"] for e in embeddings)
+    return results
 
 
 def generate_embeddings(chunks: list[str], source: str) -> list[dict]:
-    results = []
-    for chunk in chunks:
-        emb = embed_text(chunk)
-        results.append({
-            "source": source,
-            "text": chunk,
-            "embedding": emb
-        })
-    return results
+    embeddings = embed_batch(chunks)
+    return [
+        {"source": source, "text": chunk, "embedding": emb}
+        for chunk, emb in zip(chunks, embeddings)
+    ]
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -154,12 +204,16 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     return dot / (norm_a * norm_b)
 
 
+_query_embedding_cache: dict[str, list[float]] = {}
+
 def retrieve(query: str, index: list[dict], top_k: int = 5) -> list[str]:
-    query_emb = embed_text(query)
-    scores = []
-    for item in index:
-        sim = cosine_similarity(query_emb, item["embedding"])
-        scores.append((sim, item["text"]))
+    if query not in _query_embedding_cache:
+        _query_embedding_cache[query] = embed_text(query)
+    query_emb = _query_embedding_cache[query]
+    scores = [
+        (cosine_similarity(query_emb, item["embedding"]), item["text"])
+        for item in index
+    ]
     scores.sort(reverse=True)
     return [text for _, text in scores[:top_k]]
 
@@ -181,14 +235,8 @@ def build_rag_index(folder_path: str = "base-conocimiento") -> list[dict]:
     index = []
     for filename in os.listdir(folder_path):
         path = os.path.join(folder_path, filename)
-        if filename.endswith(".pdf"):
-            text = extract_text_from_pdf(path)
-        elif filename.endswith(".docx"):
-            text = extract_text_from_docx(path)
-        else:
-            continue
-        chunks = chunking(text)
-        index.extend(generate_embeddings(chunks, source=filename))
+        entries = index_single_file(path, filename)
+        index.extend(entries)
     save_index(index)
     return index
 
@@ -208,12 +256,13 @@ Si todavía no hay datos suficientes para cerrar esa sección, haz la pregunta m
 """.strip()
 
 
-def init_interview(topic: str):
+def init_interview(topic: str, system_prompt: str = None):
     chat = client.chats.create(
         model=CHAT_MODEL,
         config={
-            "system_instruction": SYSTEM_PROMPT,
-            "temperature": 0.7
+            "system_instruction": system_prompt or SYSTEM_PROMPT,
+            "temperature": 0.7,
+            "thinking_config": {"thinking_budget": 0},
         }
     )
     first_input = _build_initial_prompt(topic)
@@ -247,10 +296,15 @@ Tu única misión es convertir la transcripción de una entrevista en un procedi
 
 Reglas:
 - Escribe en español formal ISO. Tercera persona, futuro de obligación.
-- Nivel de detalle intermedio: explica qué se hace, quién lo hace y el resultado esperado.
+- Nivel de detalle ALTO: cada paso del desarrollo debe explicar qué se hace, quién lo hace, cómo se hace, en qué plazo si se mencionó, qué registro o documento se genera y cuál es el resultado esperado.
+- Desarrolla cada subapartado en al menos 3-5 frases completas. No uses listas de puntos escuetos; redacta párrafos narrativos fluidos.
+- El apartado "Desarrollo" debe ser el más extenso del documento: desglosa el proceso en tantos subapartados como pasos tenga, con subtítulos en negrita.
+- Responsabilidades: describe con detalle las funciones de cada cargo implicado, no solo un listado.
+- Objeto y Alcance: redáctalos con suficiente contexto para que alguien ajeno a la empresa entienda el propósito y límites del procedimiento.
+- Definiciones: incluye todas las siglas, términos técnicos y nombres de sistemas mencionados en la transcripción.
 - No inventes datos que no aparezcan en la transcripción.
 - Usa los cargos reales de GYC y menciona AHORA cuando sea relevante.
-- El diagrama_mermaid debe representar fielmente el flujo del procedimiento.
+- El diagrama_mermaid debe representar fielmente el flujo completo del procedimiento, incluyendo decisiones y caminos alternativos si los hay.
 
 Cuando termines de redactar escribe exactamente:
 
@@ -306,20 +360,31 @@ Redacta el procedimiento completo en formato JSON con esta estructura exacta:
 """
 
 
-def draft_procedure(transcript: str, rag_context: str = "") -> str:
+def draft_procedure(transcript: str, rag_context: str = "", draft_system_prompt: str = None) -> str:
     prompt = _DRAFT_PROMPT_TPL.format(
         rag_context=rag_context or "No hay procedimientos existentes indexados.",
         transcript=transcript,
     )
-    response = client.models.generate_content(
-        model=DRAFT_MODEL,
-        contents=prompt,
-        config={
-            "system_instruction": DRAFT_SYSTEM_PROMPT,
-            "temperature": 0.3,
-        }
-    )
-    return response.text
+    config = {
+        "system_instruction": draft_system_prompt or DRAFT_SYSTEM_PROMPT,
+        "temperature": 1,
+    }
+    models_to_try = [DRAFT_MODEL, CHAT_MODEL]
+    last_error = None
+    for model in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=config,
+            )
+            return response.text
+        except Exception as e:
+            last_error = e
+            if "503" in str(e) or "UNAVAILABLE" in str(e):
+                continue
+            raise
+    raise last_error
 
 
 # ── 7. Extracción de JSON y generación de .docx ───────────────────────────────
