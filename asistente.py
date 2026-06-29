@@ -419,7 +419,7 @@ Reglas:
 - Definiciones: incluye todas las siglas, términos técnicos y nombres de sistemas mencionados en la transcripción.
 - No inventes datos que no aparezcan en la transcripción.
 - Usa los cargos reales de GYC y menciona el ERP cuando sea relevante, nunca por su nombre comercial.
-- El diagrama_mermaid debe representar fielmente el flujo completo del procedimiento, incluyendo decisiones y caminos alternativos si los hay.
+- El diagrama_mermaid debe representar fielmente el flujo completo del procedimiento, incluyendo decisiones y caminos alternativos si los hay. Usa SIEMPRE "flowchart TD" (top-down, vertical). Incluye un nodo por cada subapartado del Desarrollo más los nodos de inicio y fin. Nunca uses flowchart LR ni diagramas de un solo nivel.
 
 ## Reglas anti-sobrecompromiso (crítico para auditorías ISO)
 
