@@ -19,31 +19,6 @@ RAG_INDEX_PATH = os.environ.get("RAG_CACHE_DIR", ".") + "/rag_index.json"
 FOLDER_PATH    = "base-conocimiento"
 
 
-# ── Autenticación ──────────────────────────────────────────────────────────────
-
-def _load_users() -> dict[str, str]:
-    """Lee usuarios del formato APP_USERS=usuario1:clave1,usuario2:clave2."""
-    raw = os.environ.get("APP_USERS", "").strip()
-    users: dict[str, str] = {}
-    for entry in raw.split(","):
-        entry = entry.strip()
-        if ":" in entry:
-            name, _, pwd = entry.partition(":")
-            users[name.strip()] = pwd.strip()
-    return users
-
-
-@cl.password_auth_callback
-def auth_callback(username: str, password: str) -> cl.User | None:
-    users = _load_users()
-    if not users:
-        # APP_USERS no configurado: acceso sin restricción (compatibilidad)
-        return cl.User(identifier=username or "anónimo")
-    if users.get(username) == password:
-        return cl.User(identifier=username)
-    return None
-
-
 # ── Indexado con progreso ──────────────────────────────────────────────────────
 
 async def _build_index_with_progress(folder_path: str) -> list[dict]:
