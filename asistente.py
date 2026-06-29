@@ -3,15 +3,62 @@
 
 import os
 import json
-import re
-import io
 import time
+from datetime import datetime, timezone
 import numpy as np
 from dotenv import load_dotenv
 from google import genai
 from docx import Document as DocxReader
 from pypdf import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from pydantic import BaseModel
+
+
+# ── Esquema de documento ISO (contrato de salida forzado) ─────────────────────
+
+class HistorialEntry(BaseModel):
+    rev: str
+    fecha: str
+    descripcion: str
+    revisado: str = ""
+    elaborado: str = ""
+
+class Definicion(BaseModel):
+    termino: str
+    descripcion: str
+
+class Responsabilidad(BaseModel):
+    cargo: str
+    tareas: list[str]
+
+class ApartadoDesarrollo(BaseModel):
+    num: str
+    titulo: str
+    descripcion: str
+
+class RegistroArchivo(BaseModel):
+    documento: str
+    responsable: str
+    lugar: str
+
+class Procedimiento(BaseModel):
+    codigo: str
+    nombre: str
+    fecha: str
+    revision: str = "00"
+    paginas: int = 5
+    elaborado_por: str = "Responsable de Calidad"
+    aprobado_por: str = "Gerencia"
+    historial: list[HistorialEntry]
+    objeto: str
+    alcance: str
+    definiciones: list[Definicion]
+    responsabilidades: list[Responsabilidad]
+    desarrollo: list[ApartadoDesarrollo]
+    archivo: list[RegistroArchivo]
+    referencias: list[str]
+    anexos: list[str]
+    diagrama_mermaid: str
 
 # ── 1. Configuración ───────────────────────────────────────────────────────────
 
@@ -160,13 +207,26 @@ def extract_text_from_docx(path: str) -> str:
 
 
 def extract_text_from_pdf(path: str) -> str:
-    pdf = PdfReader(path)
-    textos = []
-    for t in pdf.pages:
-        text = t.extract_text()
-        if text:
-            textos.append(text)
-    return "\n".join(textos)
+    try:
+        import pdfplumber
+        textos = []
+        with pdfplumber.open(path) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text(x_tolerance=3, y_tolerance=3)
+                if text:
+                    textos.append(text)
+                # Preserva tablas como filas pipe-separadas
+                for table in page.extract_tables():
+                    for row in table:
+                        cells = [str(c).strip() if c else "" for c in row]
+                        row_text = " | ".join(c for c in cells if c)
+                        if row_text:
+                            textos.append(row_text)
+        return "\n".join(textos)
+    except Exception:
+        # Fallback a PyPDF si pdfplumber falla en algún PDF corrupto
+        pdf = PdfReader(path)
+        return "\n".join(p.extract_text() for p in pdf.pages if p.extract_text())
 
 
 def extract_text_from_md(path: str) -> str:
@@ -256,8 +316,9 @@ def embed_batch(texts: list[str], batch_size: int = 100) -> list[list[float]]:
 
 def generate_embeddings(chunks: list[str], source: str) -> list[dict]:
     embeddings = embed_batch(chunks)
+    indexed_at = datetime.now(timezone.utc).isoformat()
     return [
-        {"source": source, "text": chunk, "embedding": emb}
+        {"source": source, "text": chunk, "embedding": emb, "indexed_at": indexed_at}
         for chunk, emb in zip(chunks, embeddings)
     ]
 
@@ -269,10 +330,13 @@ def retrieve(query: str, index: list[dict], top_k: int = 5) -> list[str]:
         _query_embedding_cache[query] = embed_text(query)
     query_vec = np.array(_query_embedding_cache[query])
     matrix    = np.array([item["embedding"] for item in index])
-    # Similaridad coseno vectorizada: más rápido que calcular entrada a entrada
     norms  = np.linalg.norm(matrix, axis=1) * np.linalg.norm(query_vec)
     scores = matrix @ query_vec / np.where(norms == 0, 1e-10, norms)
     top_idx = np.argsort(scores)[-top_k:][::-1]
+    label = query[:60].replace("\n", " ")
+    for rank, i in enumerate(top_idx):
+        src = index[int(i)].get("source", "?")
+        print(f"[retrieval] rank={rank+1} score={scores[int(i)]:.3f} source={src} query={label!r}")
     return [index[int(i)]["text"] for i in top_idx]
 
 # ── 4. RAG — construcción y carga del índice ──────────────────────────────────
@@ -365,12 +429,6 @@ Reglas:
 - Prefiere "velará por", "se asegurará de", "supervisará" sobre verbos que implican comprobación sistemática con frecuencia fija.
 - Si algo no se mencionó en la entrevista, omítelo o descríbelo de forma genérica. No rellenes huecos con prácticas habituales que podrían no cumplirse.
 - El objetivo es que el documento describa fielmente lo que se hace, sin imponer más de lo que la empresa puede garantizar siempre.
-
-Cuando termines de redactar escribe exactamente:
-
-FINALIZADO
-
-E inmediatamente después el bloque JSON, sin texto adicional.
 """
 
 _DRAFT_PROMPT_TPL = """\
@@ -381,49 +439,13 @@ _DRAFT_PROMPT_TPL = """\
 {transcript}
 
 --- INSTRUCCIONES ---
-Redacta el procedimiento completo en formato JSON con esta estructura exacta:
-
-```json
-{{
-  "codigo": "PC-XX",
-  "nombre": "NOMBRE EN MAYÚSCULAS",
-  "fecha": "DD/MM/AA",
-  "revision": "00",
-  "paginas": 5,
-  "elaborado_por": "Responsable de Calidad",
-  "aprobado_por": "Gerencia",
-  "historial": [
-    {{
-      "rev": "00",
-      "fecha": "DD/MM/AA",
-      "descripcion": "Nuevo lanzamiento documental en revisión 00",
-      "revisado": "",
-      "elaborado": ""
-    }}
-  ],
-  "objeto": "...",
-  "alcance": "...",
-  "definiciones": [
-    {{"termino": "ERP", "descripcion": "Sistema de planificación de recursos empresariales corporativo."}}
-  ],
-  "responsabilidades": [
-    {{"cargo": "Nombre del cargo", "tareas": ["Tarea 1.", "Tarea 2."]}}
-  ],
-  "desarrollo": [
-    {{"num": "4.1.", "titulo": "Título del apartado", "descripcion": "Descripción."}}
-  ],
-  "archivo": [
-    {{"documento": "Nombre del registro", "responsable": "Cargo", "lugar": "Lugar"}}
-  ],
-  "referencias": ["PC-02: «Procesos Relacionados con los Clientes»"],
-  "anexos": ["Anexo 1, PC-XX: Nombre del anexo"],
-  "diagrama_mermaid": "flowchart TD\\n    A([Inicio]) --> B[Paso 1]\\n    B --> C([Fin])"
-}}
-```
+Redacta el procedimiento ISO completo basándote exclusivamente en la transcripción de la entrevista y el contexto de procedimientos existentes.
+Aplica todas las reglas del sistema: prosa narrativa en el desarrollo, sin listas, tercera persona, futuro de obligación, anti-sobrecompromiso.
 """
 
 
-def draft_procedure(transcript: str, rag_context: str = "", draft_system_prompt: str = None) -> str:
+def draft_procedure(transcript: str, rag_context: str = "", draft_system_prompt: str = None) -> dict:
+    """Redacta el procedimiento y retorna un dict validado contra el esquema Procedimiento."""
     prompt = _DRAFT_PROMPT_TPL.format(
         rag_context=rag_context or "No hay procedimientos existentes indexados.",
         transcript=transcript,
@@ -431,6 +453,8 @@ def draft_procedure(transcript: str, rag_context: str = "", draft_system_prompt:
     config = {
         "system_instruction": draft_system_prompt or DRAFT_SYSTEM_PROMPT,
         "temperature": 1,
+        "response_mime_type": "application/json",
+        "response_schema": Procedimiento,
     }
     models_to_try = [DRAFT_MODEL, CHAT_MODEL]
     last_error = None
@@ -441,7 +465,10 @@ def draft_procedure(transcript: str, rag_context: str = "", draft_system_prompt:
                 contents=prompt,
                 config=config,
             )
-            return response.text
+            # response.parsed es el modelo Pydantic cuando se usa response_schema
+            if getattr(response, "parsed", None) is not None:
+                return response.parsed.model_dump()
+            return Procedimiento.model_validate_json(response.text).model_dump()
         except Exception as e:
             last_error = e
             if "503" in str(e) or "UNAVAILABLE" in str(e):
@@ -459,23 +486,6 @@ DEFAULTS = {
     "aprobado_por":  "Gerencia",
 }
 
-
-def extract_json(text: str) -> dict | None:
-    """Extrae el primer bloque ```json ... ``` del texto y lo parsea."""
-    m = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(1))
-        except json.JSONDecodeError:
-            pass
-    # Fallback: busca cualquier { } si no hay bloque marcado
-    m = re.search(r"\{.*\}", text, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except json.JSONDecodeError:
-            pass
-    return None
 
 
 def add_defaults(data: dict) -> dict:

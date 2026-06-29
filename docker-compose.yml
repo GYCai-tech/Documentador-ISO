@@ -16,6 +16,11 @@ services:
       - RAG_CACHE_DIR=/app/rag_cache
       - OUTPUT_DIR=/app/documentos-generados
       - PYTHONPATH=/app
+      # Secret JWT para la autenticación de Chainlit (obligatorio con auth activa)
+      - CHAINLIT_AUTH_SECRET=${CHAINLIT_AUTH_SECRET}
+      # Usuarios con acceso — formato: nombre:clave,nombre2:clave2
+      # Si se omite, la app queda sin restricción de acceso.
+      - APP_USERS=${APP_USERS:-}
     restart: unless-stopped
 
 volumes:

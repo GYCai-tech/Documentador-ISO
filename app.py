@@ -10,12 +10,38 @@ from asistente import (
     extract_text_from_docx, extract_text_from_pdf, extract_text_from_md,
     index_single_file, chunking, generate_embeddings,
     init_interview, continue_interview, transcript_from_log,
-    draft_procedure, extract_json, add_defaults, generate_docx,
+    draft_procedure, add_defaults, generate_docx,
     SYSTEM_PROMPT, SYSTEM_PROMPT_EXPRESS, DRAFT_SYSTEM_PROMPT,
 )
+from auditoria import registrar_generacion
 
 RAG_INDEX_PATH = os.environ.get("RAG_CACHE_DIR", ".") + "/rag_index.json"
 FOLDER_PATH    = "base-conocimiento"
+
+
+# ── Autenticación ──────────────────────────────────────────────────────────────
+
+def _load_users() -> dict[str, str]:
+    """Lee usuarios del formato APP_USERS=usuario1:clave1,usuario2:clave2."""
+    raw = os.environ.get("APP_USERS", "").strip()
+    users: dict[str, str] = {}
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if ":" in entry:
+            name, _, pwd = entry.partition(":")
+            users[name.strip()] = pwd.strip()
+    return users
+
+
+@cl.password_auth_callback
+def auth_callback(username: str, password: str) -> cl.User | None:
+    users = _load_users()
+    if not users:
+        # APP_USERS no configurado: acceso sin restricción (compatibilidad)
+        return cl.User(identifier=username or "anónimo")
+    if users.get(username) == password:
+        return cl.User(identifier=username)
+    return None
 
 
 # ── Indexado con progreso ──────────────────────────────────────────────────────
@@ -96,11 +122,15 @@ async def on_chat_start():
         index = await _build_index_with_progress(FOLDER_PATH)
     cl.user_session.set("rag_index", index)
 
+    user     = cl.user_session.get("user")
+    username = user.identifier if user else None
+    greeting = f"Bienvenido, **{username}**.\n\n" if username else ""
+
     cl.user_session.set("phase", "menu")
     await cl.Message(
         content=(
             "# GYC · Asistente ISO\n\n"
-            "Bienvenido al asistente de documentación ISO 9001 de **Gómez y Crespo S.A.**\n\n"
+            f"{greeting}"
             "¿Qué quieres hacer?"
         ),
         actions=[
@@ -341,6 +371,10 @@ async def handle_upload():
     index = cl.user_session.get("rag_index", [])
     for f in uploaded:
         msg = await cl.Message(content=f"Indexando **{f.name}**...").send()
+        # Purga entradas obsoletas del mismo archivo antes de re-indexar
+        before = len(index)
+        index  = [e for e in index if e.get("source") != f.name]
+        purged = before - len(index)
         try:
             entries = await asyncio.to_thread(index_single_file, f.path, f.name)
         except Exception as e:
@@ -349,7 +383,9 @@ async def handle_upload():
             continue
         if entries:
             index.extend(entries)
-            msg.content = f"**{f.name}** — {len(entries)} fragmentos indexados."
+            indexed_at  = entries[0].get("indexed_at", "")[:10]
+            purge_note  = f", reemplazó {purged} fragmentos anteriores" if purged else ""
+            msg.content = f"**{f.name}** — {len(entries)} fragmentos indexados ({indexed_at}{purge_note})."
         else:
             msg.content = f"**{f.name}** — formato no soportado u omitido."
         await msg.update()
@@ -373,21 +409,35 @@ async def generate_and_deliver():
     rag_context         = cl.user_session.get("rag_context", "")
     transcript          = transcript_from_log(log)
     draft_system_prompt = cl.user_session.get("draft_system_prompt", DRAFT_SYSTEM_PROMPT)
+    tema                = cl.user_session.get("topic", "")
+    index               = cl.user_session.get("rag_index", [])
+    user                = cl.user_session.get("user")
+    username            = user.identifier if user else "anónimo"
 
     status = await cl.Message(content="Redactando procedimiento ISO, un momento...").send()
 
+    # Re-retrieval con el transcript completo: captura vocabulario específico que
+    # el tema inicial no contenía (nombres de registros, cargos, pasos concretos).
+    if index and transcript:
+        draft_query    = transcript[-1200:] if len(transcript) > 1200 else transcript
+        extra_chunks   = await asyncio.to_thread(retrieve, draft_query, index, top_k=3)
+        existing_texts = set(rag_context.split("\n\n")) if rag_context else set()
+        additions      = [c for c in extra_chunks if c not in existing_texts]
+        if additions:
+            rag_context = (rag_context + "\n\n" + "\n\n".join(additions)).strip()
+
     data = None
     for attempt in range(2):
-        draft = await asyncio.to_thread(draft_procedure, transcript, rag_context, draft_system_prompt)
-        data  = extract_json(draft)
-        if data:
+        try:
+            data = await asyncio.to_thread(draft_procedure, transcript, rag_context, draft_system_prompt)
             break
-        if attempt == 0:
-            status.content = "JSON malformado, reintentando..."
-            await status.update()
+        except Exception:
+            if attempt == 0:
+                status.content = "Error en la generación, reintentando..."
+                await status.update()
 
     if not data:
-        status.content = "No se pudo extraer el JSON del procedimiento. Puedes seguir editando o iniciar una nueva sesión."
+        status.content = "No se pudo generar el procedimiento. Puedes seguir editando o iniciar una nueva sesión."
         await status.update()
         cl.user_session.set("phase", "interview")
         return
@@ -397,6 +447,9 @@ async def generate_and_deliver():
 
     codigo = data.get("codigo", "PC-XX")
     nombre = data.get("nombre", "")
+
+    await asyncio.to_thread(registrar_generacion, codigo, nombre, tema, out_path, username)
+
     status.content = f"Procedimiento **{codigo} — {nombre}** generado correctamente."
     await status.update()
 
