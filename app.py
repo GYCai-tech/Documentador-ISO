@@ -10,8 +10,9 @@ from asistente import (
     extract_text_from_docx, extract_text_from_pdf, extract_text_from_md,
     index_single_file, chunking, generate_embeddings,
     init_interview, continue_interview, transcript_from_log,
+    init_edit_interview,
     draft_procedure, add_defaults, generate_docx,
-    SYSTEM_PROMPT, SYSTEM_PROMPT_EXPRESS, DRAFT_SYSTEM_PROMPT,
+    SYSTEM_PROMPT, SYSTEM_PROMPT_EXPRESS, DRAFT_SYSTEM_PROMPT, EDIT_SYSTEM_PROMPT,
 )
 from auditoria import registrar_generacion
 
@@ -159,8 +160,42 @@ async def on_action_nuevo(action: cl.Action):
 @cl.action_callback("action_revisar")
 async def on_action_revisar(action: cl.Action):
     await action.remove()
-    cl.user_session.set("phase", "idle")
-    await cl.Message(content="Función de revisión próximamente disponible.").send()
+    cl.user_session.set("phase", "upload")
+
+    uploaded = await cl.AskFileMessage(
+        content="Sube el procedimiento que quieres editar (DOCX):",
+        accept=["application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+        max_files=1,
+        max_size_mb=20,
+    ).send()
+
+    if not uploaded:
+        cl.user_session.set("phase", "idle")
+        await cl.Message(content="No se subió ningún archivo. Sesión finalizada.").send()
+        return
+
+    f = uploaded[0]
+    doc_text = await asyncio.to_thread(extract_text_from_docx, f.path)
+
+    import re
+    rev_match = re.search(r'[Rr]ev(?:isi[oó]n)?\.?\s*[:.]?\s*(\d{2})', doc_text)
+    cl.user_session.set("edit_revision", rev_match.group(1) if rev_match else None)
+    cl.user_session.set("edit_mode", True)
+    cl.user_session.set("topic", f.name)
+
+    index       = cl.user_session.get("rag_index", [])
+    rag_context = "\n\n".join(retrieve(f.name, index)) if index else ""
+    cl.user_session.set("rag_context", rag_context)
+
+    thinking = await cl.Message(content="").send()
+    chat, log = await asyncio.to_thread(init_edit_interview, doc_text)
+    cl.user_session.set("chat", chat)
+    cl.user_session.set("log",  log)
+    cl.user_session.set("phase", "interview")
+
+    thinking.content = log[-1]["content"]
+    await thinking.update()
+    await _offer_approval()
 
 
 @cl.action_callback("action_subir")
@@ -417,7 +452,10 @@ async def generate_and_deliver():
         cl.user_session.set("phase", "interview")
         return
 
-    data     = add_defaults(data)
+    data         = add_defaults(data)
+    edit_revision = cl.user_session.get("edit_revision")
+    if edit_revision is not None:
+        data["revision"] = edit_revision
     out_path = await asyncio.to_thread(generate_docx, data)
 
     codigo = data.get("codigo", "PC-XX")
@@ -434,3 +472,5 @@ async def generate_and_deliver():
     ).send()
 
     cl.user_session.set("phase", "idle")
+    cl.user_session.set("edit_mode", False)
+    cl.user_session.set("edit_revision", None)
