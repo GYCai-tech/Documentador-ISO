@@ -305,7 +305,7 @@ def add_tabla_revisiones(doc, data):
             add_run(c.paragraphs[0], val, size_pt=11)
 
     headers = ["REV", "FECHA", "DESCRIPCIÓN DE LOS CAMBIOS",
-               "REVISADO Y APROVADO", "ELABORADO"]
+               "REVISADO Y APROBADO", "ELABORADO"]
     for ci, h in enumerate(headers):
         c = tbl.cell(total_filas - 1, ci)
         set_cell_bg(c, AZUL)
@@ -342,7 +342,7 @@ def add_tabla_metadatos(doc, data):
 def add_indice(doc, data):
     add_section_title(doc, "ÍNDICE")
 
-    secciones_fijas = ["Objeto.", "Alcance.", "Responsabilidades."]
+    secciones_fijas = ["Objeto.", "Alcance.", "Definiciones y Abreviaturas.", "Responsabilidades."]
     desarrollo_items = data.get("desarrollo", [])
     secciones_post   = ["Archivo.", "Diagrama de Flujo.", "Referencias.", "Anexos."]
 
@@ -386,6 +386,22 @@ def add_alcance(doc, data):
     add_run(p, data["alcance"], size_pt=12)
     set_align(p, WD_ALIGN_PARAGRAPH.JUSTIFY)
     set_spacing(p, before=60, after=60)
+    blank(doc)
+
+
+def add_definiciones(doc, data):
+    definiciones = data.get("definiciones", [])
+    add_section_title(doc, "DEFINICIONES Y ABREVIATURAS")
+    if definiciones:
+        for item in definiciones:
+            p = doc.add_paragraph()
+            add_run(p, item.get("termino", "") + ": ", bold=True, size_pt=12)
+            add_run(p, item.get("descripcion", ""), size_pt=12)
+            set_align(p, WD_ALIGN_PARAGRAPH.JUSTIFY)
+            set_spacing(p, before=0, after=40)
+    else:
+        p = doc.add_paragraph()
+        add_run(p, "No aplica.", italic=True, size_pt=12)
     blank(doc)
 
 
@@ -469,7 +485,9 @@ def render_mermaid(mermaid_code: str) -> str | None:
         )
         if result.returncode == 0 and os.path.exists(png_path):
             return png_path
-        print(f"[mmdc] Error (código {result.returncode}):\n{result.stderr[:400]}")
+        print(f"[mmdc] Error (código {result.returncode}):\nSTDERR: {result.stderr[:600]}\nSTDOUT: {result.stdout[:200]}")
+    except FileNotFoundError:
+        print("[mmdc] Error: 'mmdc' no está instalado o no está en el PATH. Instala @mermaid-js/mermaid-cli.")
     except Exception as e:
         print(f"[mmdc] Excepción: {e}")
     finally:
@@ -567,6 +585,7 @@ def generar_ficha(json_path):
     add_indice(doc, data)
     add_objeto(doc, data)
     add_alcance(doc, data)
+    add_definiciones(doc, data)
     add_responsabilidades(doc, data)
     add_desarrollo(doc, data)
     add_archivo(doc, data)

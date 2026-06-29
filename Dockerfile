@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
     npm \
     chromium \
+    antiword \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @mermaid-js/mermaid-cli \
     && mmdc --version
