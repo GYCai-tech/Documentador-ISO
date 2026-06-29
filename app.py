@@ -11,7 +11,7 @@ from asistente import (
     index_single_file, chunking, generate_embeddings,
     init_interview, continue_interview, transcript_from_log,
     draft_procedure, extract_json, add_defaults, generate_docx,
-    SYSTEM_PROMPT, DRAFT_SYSTEM_PROMPT,
+    SYSTEM_PROMPT, SYSTEM_PROMPT_EXPRESS, DRAFT_SYSTEM_PROMPT,
 )
 
 RAG_INDEX_PATH = os.environ.get("RAG_CACHE_DIR", ".") + "/rag_index.json"
@@ -31,7 +31,6 @@ async def _build_index_with_progress(folder_path: str) -> list[dict]:
     task_list.status = "Indexando base de conocimiento..."
     await task_list.send()
 
-    # Crea una tarea por archivo
     tasks = {}
     for filename in files:
         task = cl.Task(title=filename, status=cl.TaskStatus.READY)
@@ -60,7 +59,7 @@ async def _build_index_with_progress(folder_path: str) -> list[dict]:
     return index
 
 
-# ── Inicio de sesión ───────────────────────────────────────────────────────────
+# ── Settings ───────────────────────────────────────────────────────────────────
 
 @cl.on_settings_update
 async def on_settings_update(settings: dict):
@@ -68,9 +67,10 @@ async def on_settings_update(settings: dict):
     cl.user_session.set("draft_system_prompt", settings.get("draft_system_prompt", DRAFT_SYSTEM_PROMPT))
 
 
+# ── Chat start ─────────────────────────────────────────────────────────────────
+
 @cl.on_chat_start
 async def on_chat_start():
-    # Inicializa los prompts en sesión y muestra el panel de configuración
     cl.user_session.set("system_prompt",       SYSTEM_PROMPT)
     cl.user_session.set("draft_system_prompt", DRAFT_SYSTEM_PROMPT)
 
@@ -89,7 +89,6 @@ async def on_chat_start():
         ),
     ]).send()
 
-    # Carga o construye el índice RAG
     index = load_index(RAG_INDEX_PATH)
     if index is not None:
         await cl.Message(content=f"Base de conocimiento cargada — {len(index)} fragmentos indexados.").send()
@@ -97,34 +96,19 @@ async def on_chat_start():
         index = await _build_index_with_progress(FOLDER_PATH)
     cl.user_session.set("rag_index", index)
 
-    # Bienvenida y selección de modo
+    cl.user_session.set("phase", "menu")
     await cl.Message(
         content=(
             "# GYC · Asistente ISO\n\n"
             "Bienvenido al asistente de documentación ISO 9001 de **Gómez y Crespo S.A.**\n\n"
             "¿Qué quieres hacer?"
-        )
-    ).send()
-
-    res = await cl.AskActionMessage(
-        content="Selecciona una opción:",
+        ),
         actions=[
-            cl.Action(name="nuevo",   payload={"value": "nuevo"},   label="Crear nuevo procedimiento"),
-            cl.Action(name="revisar", payload={"value": "revisar"}, label="Revisar procedimiento existente"),
-            cl.Action(name="subir",   payload={"value": "subir"},   label="Subir documentos a la base de conocimiento"),
+            cl.Action(name="action_nuevo",   payload={"value": "nuevo"},   label="Crear nuevo procedimiento"),
+            cl.Action(name="action_revisar", payload={"value": "revisar"}, label="Revisar procedimiento existente"),
+            cl.Action(name="action_subir",   payload={"value": "subir"},   label="Subir documentos a la base de conocimiento"),
         ],
     ).send()
-
-    value = res.get("payload", {}).get("value") if res else None
-    if value == "nuevo":
-        cl.user_session.set("phase", "get_topic")
-        await cl.Message(content="Describe brevemente el procedimiento que quieres documentar:").send()
-    elif value == "subir":
-        cl.user_session.set("phase", "upload")
-        await handle_upload()
-    else:
-        cl.user_session.set("phase", "idle")
-        await cl.Message(content="Función de revisión próximamente disponible.").send()
 
 
 # ── Mensajes entrantes ─────────────────────────────────────────────────────────
@@ -139,22 +123,152 @@ async def on_message(msg: cl.Message):
     elif phase == "interview":
         await handle_interview(msg.content)
 
+    elif phase in ("upload", "drafting", "processing"):
+        await cl.Message(content="Por favor, espera a que termine la operación actual.").send()
+
+    elif phase in ("menu", "mode_select"):
+        await cl.Message(content="Por favor, selecciona una opción con los botones de arriba.").send()
+
     elif phase == "idle":
         await cl.Message(content="Inicia una nueva sesión para continuar.").send()
 
 
-# ── Handlers ──────────────────────────────────────────────────────────────────
+# ── Action callbacks — menú principal ─────────────────────────────────────────
+
+@cl.action_callback("action_nuevo")
+async def on_action_nuevo(action: cl.Action):
+    if cl.user_session.get("phase") not in ("menu", "post_upload"):
+        await action.remove()
+        return
+    await action.remove()
+    cl.user_session.set("phase", "mode_select")
+    await cl.Message(
+        content="¿Cómo quieres trabajar?",
+        actions=[
+            cl.Action(name="action_detallado", payload={"value": "detallado"}, label="Detallado — sección por sección"),
+            cl.Action(name="action_express",   payload={"value": "express"},   label="Express — borrador rápido"),
+        ],
+    ).send()
+
+
+@cl.action_callback("action_revisar")
+async def on_action_revisar(action: cl.Action):
+    await action.remove()
+    cl.user_session.set("phase", "idle")
+    await cl.Message(content="Función de revisión próximamente disponible.").send()
+
+
+@cl.action_callback("action_subir")
+async def on_action_subir(action: cl.Action):
+    await action.remove()
+    await handle_upload()
+
+
+# ── Action callbacks — selección de modo ──────────────────────────────────────
+
+@cl.action_callback("action_detallado")
+async def on_action_detallado(action: cl.Action):
+    if cl.user_session.get("phase") != "mode_select":
+        await action.remove()
+        return
+    await action.remove()
+    cl.user_session.set("modo", "detallado")
+    cl.user_session.set("system_prompt", SYSTEM_PROMPT)
+    cl.user_session.set("phase", "get_topic")
+    await cl.Message(content="Describe brevemente el procedimiento que quieres documentar:").send()
+
+
+@cl.action_callback("action_express")
+async def on_action_express(action: cl.Action):
+    if cl.user_session.get("phase") != "mode_select":
+        await action.remove()
+        return
+    await action.remove()
+    cl.user_session.set("modo", "express")
+    cl.user_session.set("system_prompt", SYSTEM_PROMPT_EXPRESS)
+    cl.user_session.set("phase", "get_topic")
+    await cl.Message(content="Describe brevemente el procedimiento que quieres documentar:").send()
+
+
+# ── Action callback — aprobación durante entrevista ───────────────────────────
+
+@cl.action_callback("action_ok")
+async def on_action_ok(action: cl.Action):
+    if cl.user_session.get("phase") != "interview":
+        await action.remove()
+        return
+
+    # Comprueba que el botón es el más reciente (evita doble procesado con botones viejos)
+    action_token   = action.payload.get("token", -1)
+    current_token  = cl.user_session.get("approval_token", 0)
+    if action_token != current_token:
+        await action.remove()
+        return
+
+    cl.user_session.set("phase", "processing")
+    await action.remove()
+
+    chat = cl.user_session.get("chat")
+    log  = cl.user_session.get("log")
+
+    thinking = await cl.Message(content="").send()
+    reply, log = await asyncio.to_thread(continue_interview, chat, "ok", log)
+    cl.user_session.set("log", log)
+    thinking.content = reply
+    await thinking.update()
+
+    if "FINALIZADO" in reply or _interview_complete(log):
+        await generate_and_deliver()
+        return
+
+    cl.user_session.set("phase", "interview")
+    await _offer_approval()
+
+
+# ── Action callbacks — subida de documentos ───────────────────────────────────
+
+@cl.action_callback("action_upload_mas")
+async def on_action_upload_mas(action: cl.Action):
+    await action.remove()
+    await handle_upload()
+
+
+@cl.action_callback("action_upload_volver")
+async def on_action_upload_volver(action: cl.Action):
+    await action.remove()
+    total = len(cl.user_session.get("rag_index", []))
+    await cl.Message(content=f"Base de conocimiento actualizada — **{total} fragmentos** en total.").send()
+    cl.user_session.set("phase", "post_upload")
+    await cl.Message(
+        content="¿Qué quieres hacer ahora?",
+        actions=[
+            cl.Action(name="action_nuevo",  payload={"value": "nuevo"},  label="Crear nuevo procedimiento"),
+            cl.Action(name="action_cerrar", payload={"value": "cerrar"}, label="Terminar sesión"),
+        ],
+    ).send()
+
+
+@cl.action_callback("action_cerrar")
+async def on_action_cerrar(action: cl.Action):
+    await action.remove()
+    cl.user_session.set("phase", "idle")
+    await cl.Message(content="Sesión terminada. Recarga la página para empezar de nuevo.").send()
+
+
+# ── Handlers ───────────────────────────────────────────────────────────────────
 
 async def handle_topic(topic: str):
     cl.user_session.set("topic", topic)
+    cl.user_session.set("phase", "processing")
 
-    # Recupera contexto RAG relevante
     index       = cl.user_session.get("rag_index", [])
     rag_context = "\n\n".join(retrieve(topic, index)) if index else ""
     cl.user_session.set("rag_context", rag_context)
 
-    # Inicia entrevista
-    system_prompt = cl.user_session.get("system_prompt", SYSTEM_PROMPT)
+    modo = cl.user_session.get("modo", "detallado")
+    default_prompt = SYSTEM_PROMPT_EXPRESS if modo == "express" else SYSTEM_PROMPT
+    system_prompt  = cl.user_session.get("system_prompt", default_prompt)
+
     thinking = await cl.Message(content="").send()
     chat, log = await asyncio.to_thread(init_interview, topic, system_prompt)
     cl.user_session.set("chat", chat)
@@ -164,12 +278,26 @@ async def handle_topic(topic: str):
     thinking.content = log[-1]["content"]
     await thinking.update()
 
+    await _offer_approval()
+
+
+async def _offer_approval():
+    """Muestra un botón OK no bloqueante — el usuario puede escribir libremente en lugar de pulsarlo."""
+    token = cl.user_session.get("approval_token", 0) + 1
+    cl.user_session.set("approval_token", token)
+    await cl.Message(
+        content="¿Continuamos con la siguiente sección?",
+        actions=[
+            cl.Action(name="action_ok", payload={"value": "ok", "token": token}, label="✓ OK, así está bien"),
+        ],
+    ).send()
+
 
 async def handle_interview(user_input: str):
+    cl.user_session.set("phase", "processing")
     chat = cl.user_session.get("chat")
     log  = cl.user_session.get("log")
 
-    # Envía el mensaje y espera respuesta
     thinking = await cl.Message(content="").send()
     reply, log = await asyncio.to_thread(continue_interview, chat, user_input, log)
     cl.user_session.set("log", log)
@@ -177,82 +305,91 @@ async def handle_interview(user_input: str):
     thinking.content = reply
     await thinking.update()
 
-    # Detecta fin de entrevista
     if "FINALIZADO" in reply or _interview_complete(log):
         await generate_and_deliver()
+        return
+
+    cl.user_session.set("phase", "interview")
+    await _offer_approval()
 
 
 def _interview_complete(log: list) -> bool:
-    """Detecta si el asistente ha marcado la entrevista como completa."""
     last = log[-1]["content"] if log else ""
     return "FINALIZADO" in last or "procedimiento completo" in last.lower()
 
 
 async def handle_upload():
-    while True:
-        uploaded = await cl.AskFileMessage(
-            content="Sube uno o más documentos (PDF, DOCX, DOC, MD):",
-            accept=[
-                "application/pdf",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                "application/msword",
-                "text/markdown",
-                "text/plain",
-            ],
-            max_files=10,
-            max_size_mb=20,
-        ).send()
+    cl.user_session.set("phase", "upload")
 
-        if not uploaded:
-            break
+    uploaded = await cl.AskFileMessage(
+        content="Sube uno o más documentos (PDF, DOCX, DOC, MD):",
+        accept=[
+            "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "application/msword",
+            "text/markdown",
+            "text/plain",
+        ],
+        max_files=10,
+        max_size_mb=20,
+    ).send()
 
-        index = cl.user_session.get("rag_index", [])
-        for f in uploaded:
-            msg = await cl.Message(content=f"Indexando **{f.name}**...").send()
+    if not uploaded:
+        cl.user_session.set("phase", "idle")
+        return
+
+    index = cl.user_session.get("rag_index", [])
+    for f in uploaded:
+        msg = await cl.Message(content=f"Indexando **{f.name}**...").send()
+        try:
             entries = await asyncio.to_thread(index_single_file, f.path, f.name)
-            if entries:
-                index.extend(entries)
-                msg.content = f"**{f.name}** — {len(entries)} fragmentos indexados."
-            else:
-                msg.content = f"**{f.name}** — formato no soportado, omitido."
+        except Exception as e:
+            msg.content = f"**{f.name}** — error al indexar: {e}"
             await msg.update()
+            continue
+        if entries:
+            index.extend(entries)
+            msg.content = f"**{f.name}** — {len(entries)} fragmentos indexados."
+        else:
+            msg.content = f"**{f.name}** — formato no soportado u omitido."
+        await msg.update()
 
-        cl.user_session.set("rag_index", index)
-        await asyncio.to_thread(save_index, index, RAG_INDEX_PATH)
+    cl.user_session.set("rag_index", index)
+    await asyncio.to_thread(save_index, index, RAG_INDEX_PATH)
 
-        res = await cl.AskActionMessage(
-            content="¿Quieres subir más documentos?",
-            actions=[
-                cl.Action(name="mas",    payload={"value": "mas"},    label="Subir más"),
-                cl.Action(name="volver", payload={"value": "volver"}, label="Volver al menú"),
-            ],
-        ).send()
-
-        if not res or res.get("payload", {}).get("value") != "mas":
-            break
-
-    total = len(cl.user_session.get("rag_index", []))
-    cl.user_session.set("phase", "idle")
-    await cl.Message(content=f"Base de conocimiento actualizada — **{total} fragmentos** en total.").send()
+    await cl.Message(
+        content="¿Quieres subir más documentos?",
+        actions=[
+            cl.Action(name="action_upload_mas",    payload={"value": "mas"},    label="Subir más"),
+            cl.Action(name="action_upload_volver", payload={"value": "volver"}, label="Volver al menú"),
+        ],
+    ).send()
 
 
 async def generate_and_deliver():
     cl.user_session.set("phase", "drafting")
 
-    log               = cl.user_session.get("log")
-    rag_context       = cl.user_session.get("rag_context", "")
-    transcript        = transcript_from_log(log)
+    log                 = cl.user_session.get("log")
+    rag_context         = cl.user_session.get("rag_context", "")
+    transcript          = transcript_from_log(log)
     draft_system_prompt = cl.user_session.get("draft_system_prompt", DRAFT_SYSTEM_PROMPT)
 
     status = await cl.Message(content="Redactando procedimiento ISO, un momento...").send()
 
-    # Llama al modelo de redacción
-    draft = await asyncio.to_thread(draft_procedure, transcript, rag_context, draft_system_prompt)
-    data  = extract_json(draft)
+    data = None
+    for attempt in range(2):
+        draft = await asyncio.to_thread(draft_procedure, transcript, rag_context, draft_system_prompt)
+        data  = extract_json(draft)
+        if data:
+            break
+        if attempt == 0:
+            status.content = "JSON malformado, reintentando..."
+            await status.update()
 
     if not data:
-        status.content = "No se pudo extraer el JSON del procedimiento. Inténtalo de nuevo."
+        status.content = "No se pudo extraer el JSON del procedimiento. Puedes seguir editando o iniciar una nueva sesión."
         await status.update()
+        cl.user_session.set("phase", "interview")
         return
 
     data     = add_defaults(data)
@@ -263,7 +400,6 @@ async def generate_and_deliver():
     status.content = f"Procedimiento **{codigo} — {nombre}** generado correctamente."
     await status.update()
 
-    # Ofrece descarga
     await cl.Message(
         content="Tu procedimiento está listo:",
         elements=[cl.File(name=os.path.basename(out_path), path=out_path)]
