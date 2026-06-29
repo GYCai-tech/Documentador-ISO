@@ -479,18 +479,17 @@ def draft_procedure(transcript: str, rag_context: str = "", draft_system_prompt:
 
 # ── 7. Extracción de JSON y generación de .docx ───────────────────────────────
 
-DEFAULTS = {
-    "revision":      "00",
-    "paginas":       5,
-    "elaborado_por": "Responsable de Calidad",
-    "aprobado_por":  "Gerencia",
-}
-
-
-
 def add_defaults(data: dict) -> dict:
-    """Rellena campos fijos de GYC que no se preguntan en la entrevista."""
-    return {**DEFAULTS, **data}
+    """Fuerza los campos fijos de GYC ignorando lo que haya generado el modelo."""
+    today = datetime.now().strftime("%d/%m/%y")
+    overrides = {
+        "revision":      "00",
+        "paginas":       5,
+        "elaborado_por": "Responsable de Calidad",
+        "aprobado_por":  "Gerencia",
+        "fecha":         today,
+    }
+    return {**data, **overrides}
 
 
 def generate_docx(data: dict) -> str:
