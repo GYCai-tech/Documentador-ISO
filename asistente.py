@@ -3,11 +3,10 @@
 
 import os
 import json
-import math
 import re
 import io
 import time
-import requests
+import numpy as np
 from dotenv import load_dotenv
 from google import genai
 from docx import Document as DocxReader
@@ -31,13 +30,13 @@ EMBED_MODEL = "gemini-embedding-001"
 SYSTEM_PROMPT = """
 # Instrucciones — GPT Documentador ISO de GÓMEZ Y CRESPO S.A.
 
-Eres un consultor experto en calidad ISO integrado en el sistema documental de GÓMEZ Y CRESPO S.A. (fabricante de equipamiento agroganadero, ISO 9001:2015 e ISO 14001:2015, ERP: AHORA, sede en Ourense). Redactas procedimientos ISO en español formal.
+Eres un consultor experto en calidad ISO integrado en el sistema documental de GÓMEZ Y CRESPO S.A. (fabricante de equipamiento agroganadero, ISO 9001:2015 e ISO 14001:2015, sede en Ourense). Redactas procedimientos ISO en español formal.
 
 ## Contexto de la empresa
 
-- Cargos habituales: Gerencia, Responsable de Calidad y Medio Ambiente, Responsable de Compras, Responsable de Producción, Departamento Técnico, Administración.
-- ERP/CRM corporativo: AHORA.
-- Elabora siempre: Responsable de Calidad y Medio Ambiente.
+- Cargos habituales: Gerencia, Responsable de Calidad, Responsable de Compras, Responsable de Producción, Departamento Técnico, Administración.
+- ERP/CRM corporativo: ERP (no menciones el nombre comercial del ERP, refiérete siempre a él como "el ERP").
+- Elabora siempre: Responsable de Calidad.
 - Aprueba siempre: Gerencia.
 - No menciones cláusulas ISO en el documento; el cumplimiento normativo ya está implícito.
 
@@ -62,12 +61,22 @@ Orden de secciones:
 9. Referencias
 10. Anexos
 
+### Instrucciones específicas para la sección Responsabilidades
+
+La sección Responsabilidades se redacta **a partir del Desarrollo**: extrae de él los cargos que aparecen mencionados explícitamente y describe sus tareas según lo que el propio Desarrollo ya establece. No añadas cargos genéricos (p. ej. "Todo el Personal") salvo que estén mencionados de forma específica en el Desarrollo.
+
+Cuando trabajes la sección Responsabilidades:
+- Incluye únicamente los cargos que aparezcan mencionados de forma explícita en el Desarrollo confirmado.
+- Para cada cargo, redacta sus tareas extrayéndolas directamente de lo que el Desarrollo describe para ese cargo.
+- Nunca dejes un cargo sin al menos dos tareas concretas; si el Desarrollo solo menciona una acción para ese cargo, profundiza preguntando al usuario antes de redactar.
+- No añadas cargos "de relleno" ni responsabilidades genéricas que no estén respaldadas por el Desarrollo.
+
 ## Reglas de redacción
 
 - Usa siempre tercera persona + futuro de obligación.
 - Usa tono formal, claro y narrativo.
 - Nombra siempre el cargo completo.
-- Menciona AHORA cuando sea relevante.
+- Menciona el ERP cuando sea relevante, pero nunca por su nombre comercial.
 - No inventes datos.
 - Usa negritas inline con **texto**.
 - En el desarrollo, cada subapartado llevará un subtítulo en negrita como primera frase.
@@ -98,6 +107,41 @@ FINALIZADO
 No añadas ningún texto después de esa palabra.
 """
 
+SYSTEM_PROMPT_EXPRESS = """
+# Instrucciones — Modo Express · GPT Documentador ISO de GÓMEZ Y CRESPO S.A.
+
+Eres un consultor experto en calidad ISO de GÓMEZ Y CRESPO S.A. (fabricante de equipamiento agroganadero, ISO 9001:2015 e ISO 14001:2015, sede en Ourense). Elabora siempre: Responsable de Calidad. Aprueba siempre: Gerencia. ERP corporativo: refiérete a él como "el ERP". No menciones cláusulas ISO.
+
+## Tu misión en modo express
+
+Recopilar toda la información necesaria en el mínimo de turnos posible, luego cerrar la entrevista.
+
+## Flujo
+
+1. En tu primer mensaje, lanza un bloque de preguntas clave que cubra todas las secciones del procedimiento:
+   - ¿Cuál es el objeto y alcance del procedimiento?
+   - ¿Quién o quiénes son los responsables principales?
+   - ¿Cuáles son los pasos principales del proceso, de inicio a fin?
+   - ¿Qué documentos, registros o formularios se generan o consultan?
+   - ¿Hay casos especiales, excepciones o situaciones de fallo relevantes?
+   - ¿Hay referencias a otros procedimientos o normativa interna?
+   - ¿Hay anexos?
+
+2. Con la respuesta del usuario, redacta un borrador completo de todas las secciones y pregunta: "¿Lo dejamos así o ajustamos algo?"
+
+3. Aplica los ajustes si los hay, confirma y escribe:
+
+FINALIZADO
+
+No añadas ningún texto después de esa palabra.
+
+## Reglas de redacción
+
+- Tercera persona, futuro de obligación, tono formal.
+- Nombra siempre el cargo completo.
+- No inventes datos.
+"""
+
 # ── 2. RAG — extracción de texto ───────────────────────────────────────────────
 
 def extract_text_from_docx(path: str) -> str:
@@ -106,6 +150,12 @@ def extract_text_from_docx(path: str) -> str:
     for p in doc.paragraphs:
         if p.text.strip():
             textos.append(p.text)
+    # Incluye texto de tablas (responsables, registros, pasos…)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                if cell.text.strip():
+                    textos.append(cell.text.strip())
     return "\n".join(textos)
 
 
@@ -125,24 +175,41 @@ def extract_text_from_md(path: str) -> str:
 
 
 def extract_text_from_doc(path: str) -> str:
+    import subprocess
     import docx2txt
-    return docx2txt.process(path) or ""
+    try:
+        return docx2txt.process(path) or ""
+    except Exception:
+        # Formato .doc binario (OLE) — usar antiword
+        try:
+            result = subprocess.run(
+                ["antiword", path], capture_output=True, text=True, timeout=30
+            )
+            return result.stdout or ""
+        except Exception:
+            return ""
 
 
 def index_single_file(path: str, filename: str) -> list[dict]:
     """Extrae texto, trocea y genera embeddings para un único archivo."""
-    if filename.endswith(".pdf"):
-        text = extract_text_from_pdf(path)
-    elif filename.endswith(".docx"):
-        text = extract_text_from_docx(path)
-    elif filename.endswith(".doc"):
-        text = extract_text_from_doc(path)
-    elif filename.endswith(".md"):
-        text = extract_text_from_md(path)
-    else:
+    try:
+        if filename.endswith(".pdf"):
+            text = extract_text_from_pdf(path)
+        elif filename.endswith(".docx"):
+            text = extract_text_from_docx(path)
+        elif filename.endswith(".doc"):
+            text = extract_text_from_doc(path)
+        elif filename.endswith(".md"):
+            text = extract_text_from_md(path)
+        else:
+            return []
+        chunks = chunking(text)
+        if not chunks:
+            return []
+        return generate_embeddings(chunks, filename)
+    except Exception as e:
+        print(f"[index_single_file] Error procesando '{filename}': {e}")
         return []
-    chunks = chunking(text)
-    return generate_embeddings(chunks, filename)
 
 # ── 3. RAG — chunking y embeddings ────────────────────────────────────────────
 
@@ -162,30 +229,28 @@ def embed_text(text: str) -> list[float]:
 
 
 def embed_batch(texts: list[str], batch_size: int = 100) -> list[list[float]]:
-    """Embede una lista de textos usando batchEmbedContents (hasta 100 por llamada)."""
-    api_key = os.getenv("GOOGLE_API_KEY")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{EMBED_MODEL}:batchEmbedContents?key={api_key}"
+    """Embede una lista de textos en lotes usando el SDK de Google GenAI."""
     results = []
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
-        payload = {
-            "requests": [
-                {
-                    "model": f"models/{EMBED_MODEL}",
-                    "content": {"parts": [{"text": t}]}
-                }
-                for t in batch
-            ]
-        }
         for attempt in range(3):
-            response = requests.post(url, json=payload)
-            if response.status_code == 429:
-                time.sleep(2 ** attempt)
-                continue
-            response.raise_for_status()
-            break
-        embeddings = response.json()["embeddings"]
-        results.extend(e["values"] for e in embeddings)
+            try:
+                response = client.models.embed_content(
+                    model=EMBED_MODEL,
+                    contents=batch,
+                )
+                results.extend(e.values for e in response.embeddings)
+                break
+            except Exception as e:
+                err = str(e)
+                if "429" in err or "RESOURCE_EXHAUSTED" in err:
+                    time.sleep(2 ** attempt)
+                    continue
+                raise
+        else:
+            raise RuntimeError(
+                f"Rate-limit persistente al embeder lote {i // batch_size + 1}"
+            )
     return results
 
 
@@ -197,31 +262,24 @@ def generate_embeddings(chunks: list[str], source: str) -> list[dict]:
     ]
 
 
-def cosine_similarity(a: list[float], b: list[float]) -> float:
-    dot    = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(y * y for y in b))
-    return dot / (norm_a * norm_b)
-
-
 _query_embedding_cache: dict[str, list[float]] = {}
 
 def retrieve(query: str, index: list[dict], top_k: int = 5) -> list[str]:
     if query not in _query_embedding_cache:
         _query_embedding_cache[query] = embed_text(query)
-    query_emb = _query_embedding_cache[query]
-    scores = [
-        (cosine_similarity(query_emb, item["embedding"]), item["text"])
-        for item in index
-    ]
-    scores.sort(reverse=True)
-    return [text for _, text in scores[:top_k]]
+    query_vec = np.array(_query_embedding_cache[query])
+    matrix    = np.array([item["embedding"] for item in index])
+    # Similaridad coseno vectorizada: más rápido que calcular entrada a entrada
+    norms  = np.linalg.norm(matrix, axis=1) * np.linalg.norm(query_vec)
+    scores = matrix @ query_vec / np.where(norms == 0, 1e-10, norms)
+    top_idx = np.argsort(scores)[-top_k:][::-1]
+    return [index[int(i)]["text"] for i in top_idx]
 
 # ── 4. RAG — construcción y carga del índice ──────────────────────────────────
 
 def save_index(index: list[dict], path: str = "rag_index.json"):
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(index, f, ensure_ascii=False, indent=2)
+        json.dump(index, f, ensure_ascii=False)  # sin indent: los embeddings son arrays de ~768 floats
 
 
 def load_index(path: str = "rag_index.json") -> list[dict] | None:
@@ -230,15 +288,6 @@ def load_index(path: str = "rag_index.json") -> list[dict] | None:
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-
-def build_rag_index(folder_path: str = "base-conocimiento") -> list[dict]:
-    index = []
-    for filename in os.listdir(folder_path):
-        path = os.path.join(folder_path, filename)
-        entries = index_single_file(path, filename)
-        index.extend(entries)
-    save_index(index)
-    return index
 
 # ── 5. Fase entrevista — Gemini Flash ─────────────────────────────────────────
 
@@ -267,8 +316,10 @@ def init_interview(topic: str, system_prompt: str = None):
     )
     first_input = _build_initial_prompt(topic)
     response = chat.send_message(first_input)
+    # Se registra first_input (no topic crudo) para que la transcripción
+    # refleje exactamente lo que recibió el modelo redactor.
     log = [
-        {"role": "user",      "content": topic},
+        {"role": "user",      "content": first_input},
         {"role": "assistant", "content": response.text}
     ]
     return chat, log
@@ -299,12 +350,21 @@ Reglas:
 - Nivel de detalle ALTO: cada paso del desarrollo debe explicar qué se hace, quién lo hace, cómo se hace, en qué plazo si se mencionó, qué registro o documento se genera y cuál es el resultado esperado.
 - Desarrolla cada subapartado en al menos 3-5 frases completas. No uses listas de puntos escuetos; redacta párrafos narrativos fluidos.
 - El apartado "Desarrollo" debe ser el más extenso del documento: desglosa el proceso en tantos subapartados como pasos tenga, con subtítulos en negrita.
-- Responsabilidades: describe con detalle las funciones de cada cargo implicado, no solo un listado.
+- Responsabilidades: incluye ÚNICAMENTE los cargos mencionados de forma explícita en el Desarrollo. Extrae sus tareas directamente de lo que el Desarrollo ya describe para cada cargo. No añadas cargos genéricos ni inferidos del rol habitual en GYC si no aparecen en el Desarrollo. NUNCA dejes el array "tareas" vacío ni con una sola tarea para un cargo que sí aparece.
 - Objeto y Alcance: redáctalos con suficiente contexto para que alguien ajeno a la empresa entienda el propósito y límites del procedimiento.
 - Definiciones: incluye todas las siglas, términos técnicos y nombres de sistemas mencionados en la transcripción.
 - No inventes datos que no aparezcan en la transcripción.
-- Usa los cargos reales de GYC y menciona AHORA cuando sea relevante.
+- Usa los cargos reales de GYC y menciona el ERP cuando sea relevante, nunca por su nombre comercial.
 - El diagrama_mermaid debe representar fielmente el flujo completo del procedimiento, incluyendo decisiones y caminos alternativos si los hay.
+
+## Reglas anti-sobrecompromiso (crítico para auditorías ISO)
+
+- NUNCA escribas plazos concretos (24h, 48h, 5 días...) salvo que el usuario los haya confirmado explícitamente. Usa "en el plazo establecido", "de manera periódica", "cuando proceda".
+- NUNCA escribas frecuencias concretas (diariamente, semanalmente...) salvo que se hayan mencionado. Usa "con la periodicidad definida", "según necesidad".
+- En responsabilidades, describe QUÉ hace cada cargo, no cuándo ni con qué exactitud de tiempo.
+- Prefiere "velará por", "se asegurará de", "supervisará" sobre verbos que implican comprobación sistemática con frecuencia fija.
+- Si algo no se mencionó en la entrevista, omítelo o descríbelo de forma genérica. No rellenes huecos con prácticas habituales que podrían no cumplirse.
+- El objetivo es que el documento describa fielmente lo que se hace, sin imponer más de lo que la empresa puede garantizar siempre.
 
 Cuando termines de redactar escribe exactamente:
 
@@ -330,7 +390,7 @@ Redacta el procedimiento completo en formato JSON con esta estructura exacta:
   "fecha": "DD/MM/AA",
   "revision": "00",
   "paginas": 5,
-  "elaborado_por": "Responsable de Calidad y Medio Ambiente",
+  "elaborado_por": "Responsable de Calidad",
   "aprobado_por": "Gerencia",
   "historial": [
     {{
@@ -343,6 +403,9 @@ Redacta el procedimiento completo en formato JSON con esta estructura exacta:
   ],
   "objeto": "...",
   "alcance": "...",
+  "definiciones": [
+    {{"termino": "ERP", "descripcion": "Sistema de planificación de recursos empresariales corporativo."}}
+  ],
   "responsabilidades": [
     {{"cargo": "Nombre del cargo", "tareas": ["Tarea 1.", "Tarea 2."]}}
   ],
@@ -392,7 +455,7 @@ def draft_procedure(transcript: str, rag_context: str = "", draft_system_prompt:
 DEFAULTS = {
     "revision":      "00",
     "paginas":       5,
-    "elaborado_por": "Responsable de Calidad y Medio Ambiente",
+    "elaborado_por": "Responsable de Calidad",
     "aprobado_por":  "Gerencia",
 }
 
