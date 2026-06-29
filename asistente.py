@@ -41,7 +41,8 @@ class RegistroArchivo(BaseModel):
     responsable: str
     lugar: str
 
-class Procedimiento(BaseModel):
+class ProcedimientoBase(BaseModel):
+    """Schema para el paso 1: todo excepto responsabilidades."""
     codigo: str
     nombre: str
     fecha: str
@@ -53,12 +54,19 @@ class Procedimiento(BaseModel):
     objeto: str
     alcance: str
     definiciones: list[Definicion]
-    responsabilidades: list[Responsabilidad]
     desarrollo: list[ApartadoDesarrollo]
     archivo: list[RegistroArchivo]
     referencias: list[str]
     anexos: list[str]
     diagrama_mermaid: str
+
+class ListaResponsabilidades(BaseModel):
+    """Schema para el paso 2: responsabilidades derivadas del Desarrollo."""
+    responsabilidades: list[Responsabilidad]
+
+class Procedimiento(ProcedimientoBase):
+    """Schema completo: base + responsabilidades."""
+    responsabilidades: list[Responsabilidad]
 
 # ── 1. Configuración ───────────────────────────────────────────────────────────
 
@@ -414,7 +422,7 @@ Reglas:
 - Nivel de detalle ALTO: cada paso del desarrollo debe explicar qué se hace, quién lo hace, cómo se hace, en qué plazo si se mencionó, qué registro o documento se genera y cuál es el resultado esperado.
 - Desarrolla cada subapartado en al menos 3-5 frases completas en prosa continua. Está terminantemente prohibido usar listas de puntos, guiones o enumeraciones dentro del Desarrollo; todo el contenido debe redactarse como párrafos narrativos fluidos.
 - El apartado "Desarrollo" debe ser el más extenso del documento: desglosa el proceso en tantos subapartados como pasos tenga, con subtítulos en negrita.
-- Responsabilidades: incluye ÚNICAMENTE los cargos mencionados de forma explícita en el Desarrollo. Extrae sus tareas directamente de lo que el Desarrollo ya describe para cada cargo. No añadas cargos genéricos ni inferidos del rol habitual en GYC si no aparecen en el Desarrollo. NUNCA dejes el array "tareas" vacío ni con una sola tarea para un cargo que sí aparece.
+- Las responsabilidades se generan en un paso separado a partir del Desarrollo; no las incluyas ni las menciones en tu redacción.
 - Objeto y Alcance: redáctalos con suficiente contexto para que alguien ajeno a la empresa entienda el propósito y límites del procedimiento.
 - Definiciones: incluye todas las siglas, términos técnicos y nombres de sistemas mencionados en la transcripción.
 - No inventes datos que no aparezcan en la transcripción.
@@ -444,8 +452,59 @@ Aplica todas las reglas del sistema: prosa narrativa en el desarrollo, sin lista
 """
 
 
+_RESPONSABILIDADES_SYSTEM = """
+Eres un redactor de procedimientos ISO. Tu única tarea es extraer las responsabilidades
+de los cargos que aparecen en el texto del Desarrollo de un procedimiento.
+
+Reglas estrictas:
+- Incluye ÚNICAMENTE los cargos mencionados de forma explícita en el Desarrollo.
+- Escribe el nombre del cargo siempre con la primera letra de cada palabra en mayúscula
+  (ej. "Responsable de Calidad", "Responsable del Área Afectada").
+- Para cada cargo, agrupa sus acciones en 2 a 5 tareas concretas. No hagas una tarea
+  por cada frase del Desarrollo; sintetiza las acciones relacionadas en una sola tarea.
+- No añadas cargos que no aparezcan en el Desarrollo, aunque sean habituales en la empresa.
+- No inventes tareas. Cada tarea debe estar respaldada por algo escrito en el Desarrollo.
+- Redacta cada tarea en tercera persona, futuro de obligación (velará por, registrará, notificará…).
+""".strip()
+
+_RESPONSABILIDADES_PROMPT = """
+A continuación tienes el texto completo del apartado DESARROLLO de un procedimiento ISO.
+Extrae los cargos y sus responsabilidades tal y como se describen en ese texto.
+
+--- DESARROLLO ---
+{desarrollo}
+"""
+
+
+def _derive_responsabilidades(desarrollo: list[dict]) -> list[dict]:
+    """Paso 2: deriva responsabilidades del texto real del Desarrollo (Gemini Flash)."""
+    desarrollo_texto = "\n\n".join(
+        f"{s['num']} {s['titulo']}\n{s['descripcion']}"
+        for s in desarrollo
+    )
+    prompt = _RESPONSABILIDADES_PROMPT.format(desarrollo=desarrollo_texto)
+    response = client.models.generate_content(
+        model=CHAT_MODEL,
+        contents=prompt,
+        config={
+            "system_instruction": _RESPONSABILIDADES_SYSTEM,
+            "temperature": 0.2,
+            "response_mime_type": "application/json",
+            "response_schema": ListaResponsabilidades,
+        },
+    )
+    if getattr(response, "parsed", None) is not None:
+        return response.parsed.model_dump()["responsabilidades"]
+    return ListaResponsabilidades.model_validate_json(response.text).responsabilidades
+
+
 def draft_procedure(transcript: str, rag_context: str = "", draft_system_prompt: str = None) -> dict:
-    """Redacta el procedimiento y retorna un dict validado contra el esquema Procedimiento."""
+    """
+    Genera el procedimiento en dos pasos:
+      1. Gemini Pro redacta todo el documento (sin responsabilidades).
+      2. Gemini Flash deriva las responsabilidades del Desarrollo generado.
+    Retorna un dict validado contra el esquema Procedimiento completo.
+    """
     prompt = _DRAFT_PROMPT_TPL.format(
         rag_context=rag_context or "No hay procedimientos existentes indexados.",
         transcript=transcript,
@@ -454,7 +513,7 @@ def draft_procedure(transcript: str, rag_context: str = "", draft_system_prompt:
         "system_instruction": draft_system_prompt or DRAFT_SYSTEM_PROMPT,
         "temperature": 1,
         "response_mime_type": "application/json",
-        "response_schema": Procedimiento,
+        "response_schema": ProcedimientoBase,
     }
     models_to_try = [DRAFT_MODEL, CHAT_MODEL]
     last_error = None
@@ -465,10 +524,15 @@ def draft_procedure(transcript: str, rag_context: str = "", draft_system_prompt:
                 contents=prompt,
                 config=config,
             )
-            # response.parsed es el modelo Pydantic cuando se usa response_schema
             if getattr(response, "parsed", None) is not None:
-                return response.parsed.model_dump()
-            return Procedimiento.model_validate_json(response.text).model_dump()
+                base = response.parsed.model_dump()
+            else:
+                base = ProcedimientoBase.model_validate_json(response.text).model_dump()
+
+            # Paso 2: responsabilidades derivadas del Desarrollo real
+            responsabilidades = _derive_responsabilidades(base["desarrollo"])
+            data = {**base, "responsabilidades": responsabilidades}
+            return Procedimiento.model_validate(data).model_dump()
         except Exception as e:
             last_error = e
             if "503" in str(e) or "UNAVAILABLE" in str(e):
