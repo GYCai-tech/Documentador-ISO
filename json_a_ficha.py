@@ -519,6 +519,17 @@ def render_mermaid(mermaid_code: str) -> str | None:
     return None
 
 
+def _fit_image(png_path: str, max_w: int, max_h: int) -> dict:
+    """Devuelve width/height en EMU para que la imagen quepa en max_w × max_h
+    preservando la relación de aspecto. Lee dimensiones del header PNG sin deps."""
+    import struct
+    with open(png_path, "rb") as f:
+        f.read(16)
+        w_px, h_px = struct.unpack(">II", f.read(8))
+    scale = min(max_w / w_px, max_h / h_px)
+    return {"width": int(w_px * scale), "height": int(h_px * scale)}
+
+
 def add_diagrama(doc, data=None):
     add_section_title(doc, "DIAGRAMA DE FLUJO")
 
@@ -531,7 +542,7 @@ def add_diagrama(doc, data=None):
             print("OK")
             p = doc.add_paragraph()
             set_align(p, WD_ALIGN_PARAGRAPH.CENTER)
-            p.add_run().add_picture(png_path, width=Cm(15))
+            p.add_run().add_picture(png_path, **_fit_image(png_path, max_w=Cm(15), max_h=Cm(22)))
             set_spacing(p, before=60, after=60)
             os.unlink(png_path)
             blank(doc)
