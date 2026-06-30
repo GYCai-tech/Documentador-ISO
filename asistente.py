@@ -258,9 +258,9 @@ def extract_text_from_doc(path: str) -> str:
             return ""
 
 
-def extract_text_from_excel(path: str) -> str:
+def extract_text_from_excel(path: str, filename: str = "") -> str:
     """Extrae texto de .xlsx/.xls preservando estructura tabular hoja por hoja."""
-    ext = path.rsplit(".", 1)[-1].lower()
+    ext = (filename or path).rsplit(".", 1)[-1].lower()
     lines = []
     if ext == "xlsx":
         import openpyxl
@@ -296,7 +296,7 @@ def index_single_file(path: str, filename: str) -> list[dict]:
         elif filename.endswith(".md"):
             text = extract_text_from_md(path)
         elif filename.endswith(".xlsx") or filename.endswith(".xls"):
-            text = extract_text_from_excel(path)
+            text = extract_text_from_excel(path, filename)
         else:
             return []
         chunks = chunking(text)
