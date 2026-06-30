@@ -258,17 +258,31 @@ def extract_text_from_doc(path: str) -> str:
             return ""
 
 
+_EXCEL_MAX_ROWS_PER_SHEET = 500  # hojas con más filas se omiten si hay hojas menores
+
 def extract_text_from_excel(path: str, filename: str = "") -> str:
-    """Extrae texto de .xlsx/.xls preservando estructura tabular hoja por hoja."""
+    """Extrae texto de .xlsx/.xls preservando estructura tabular hoja por hoja.
+    Omite hojas que superan _EXCEL_MAX_ROWS_PER_SHEET cuando existen otras menores,
+    para evitar indexar hojas 'Combined' que duplican el contenido de las demás.
+    """
     import io
     ext = (filename or path).rsplit(".", 1)[-1].lower()
     lines = []
     with open(path, "rb") as fh:
         raw = fh.read()
+
+    def _should_skip(sheet_rows: int, all_row_counts: list[int]) -> bool:
+        has_smaller = any(r <= _EXCEL_MAX_ROWS_PER_SHEET for r in all_row_counts)
+        return has_smaller and sheet_rows > _EXCEL_MAX_ROWS_PER_SHEET
+
     if ext == "xls":
         import xlrd
         wb = xlrd.open_workbook(file_contents=raw)
+        row_counts = [wb.sheet_by_index(i).nrows for i in range(wb.nsheets)]
         for sheet in wb.sheets():
+            if _should_skip(sheet.nrows, row_counts):
+                print(f"[excel] Omitida hoja '{sheet.name}' ({sheet.nrows} filas > {_EXCEL_MAX_ROWS_PER_SHEET})")
+                continue
             lines.append(f"[Hoja: {sheet.name}]")
             for i in range(sheet.nrows):
                 row_text = "\t".join(str(v) for v in sheet.row_values(i))
@@ -277,7 +291,11 @@ def extract_text_from_excel(path: str, filename: str = "") -> str:
     else:
         import openpyxl
         wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
-        for sheet in wb.worksheets:
+        row_counts = [sh.max_row or 0 for sh in wb.worksheets]
+        for sheet, nrows in zip(wb.worksheets, row_counts):
+            if _should_skip(nrows, row_counts):
+                print(f"[excel] Omitida hoja '{sheet.title}' ({nrows} filas > {_EXCEL_MAX_ROWS_PER_SHEET})")
+                continue
             lines.append(f"[Hoja: {sheet.title}]")
             for row in sheet.iter_rows(values_only=True):
                 row_text = "\t".join("" if v is None else str(v) for v in row)

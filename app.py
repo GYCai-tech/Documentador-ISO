@@ -383,6 +383,7 @@ async def handle_upload():
 
     index = cl.user_session.get("rag_index", [])
     for f in uploaded:
+        print(f"[upload] name={f.name!r} path={f.path!r} mime={getattr(f, 'mime', '?')!r}")
         msg = await cl.Message(content=f"Indexando **{f.name}**...").send()
         # Purga entradas obsoletas del mismo archivo antes de re-indexar
         before = len(index)
@@ -390,7 +391,9 @@ async def handle_upload():
         purged = before - len(index)
         try:
             entries = await asyncio.to_thread(index_single_file, f.path, f.name)
+            print(f"[upload] entries={len(entries)}")
         except Exception as e:
+            print(f"[upload] excepción: {e}")
             msg.content = f"**{f.name}** — error al indexar: {e}"
             await msg.update()
             continue
