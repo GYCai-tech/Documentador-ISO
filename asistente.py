@@ -260,11 +260,23 @@ def extract_text_from_doc(path: str) -> str:
 
 def extract_text_from_excel(path: str, filename: str = "") -> str:
     """Extrae texto de .xlsx/.xls preservando estructura tabular hoja por hoja."""
+    import io
     ext = (filename or path).rsplit(".", 1)[-1].lower()
     lines = []
-    if ext == "xlsx":
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    if ext == "xls":
+        import xlrd
+        wb = xlrd.open_workbook(file_contents=raw)
+        for sheet in wb.sheets():
+            lines.append(f"[Hoja: {sheet.name}]")
+            for i in range(sheet.nrows):
+                row_text = "\t".join(str(v) for v in sheet.row_values(i))
+                if row_text.strip():
+                    lines.append(row_text)
+    else:
         import openpyxl
-        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True, data_only=True)
         for sheet in wb.worksheets:
             lines.append(f"[Hoja: {sheet.title}]")
             for row in sheet.iter_rows(values_only=True):
@@ -272,15 +284,6 @@ def extract_text_from_excel(path: str, filename: str = "") -> str:
                 if row_text.strip():
                     lines.append(row_text)
         wb.close()
-    else:
-        import xlrd
-        wb = xlrd.open_workbook(path)
-        for sheet in wb.sheets():
-            lines.append(f"[Hoja: {sheet.name}]")
-            for i in range(sheet.nrows):
-                row_text = "\t".join(str(v) for v in sheet.row_values(i))
-                if row_text.strip():
-                    lines.append(row_text)
     return "\n".join(lines)
 
 
