@@ -27,6 +27,7 @@ async def _build_index_with_progress(folder_path: str) -> list[dict]:
     files = [
         f for f in os.listdir(folder_path)
         if f.endswith(".docx") or f.endswith(".doc") or f.endswith(".pdf") or f.endswith(".md")
+        or f.endswith(".xlsx") or f.endswith(".xls")
     ]
 
     task_list = cl.TaskList()
@@ -362,13 +363,15 @@ async def handle_upload():
     cl.user_session.set("phase", "upload")
 
     uploaded = await cl.AskFileMessage(
-        content="Sube uno o más documentos (PDF, DOCX, DOC, MD):",
+        content="Sube uno o más documentos (PDF, DOCX, DOC, MD, XLSX, XLS):",
         accept=[
             "application/pdf",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             "application/msword",
             "text/markdown",
             "text/plain",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "application/vnd.ms-excel",
         ],
         max_files=10,
         max_size_mb=20,

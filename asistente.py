@@ -258,6 +258,32 @@ def extract_text_from_doc(path: str) -> str:
             return ""
 
 
+def extract_text_from_excel(path: str) -> str:
+    """Extrae texto de .xlsx/.xls preservando estructura tabular hoja por hoja."""
+    ext = path.rsplit(".", 1)[-1].lower()
+    lines = []
+    if ext == "xlsx":
+        import openpyxl
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        for sheet in wb.worksheets:
+            lines.append(f"[Hoja: {sheet.title}]")
+            for row in sheet.iter_rows(values_only=True):
+                row_text = "\t".join("" if v is None else str(v) for v in row)
+                if row_text.strip():
+                    lines.append(row_text)
+        wb.close()
+    else:
+        import xlrd
+        wb = xlrd.open_workbook(path)
+        for sheet in wb.sheets():
+            lines.append(f"[Hoja: {sheet.name}]")
+            for i in range(sheet.nrows):
+                row_text = "\t".join(str(v) for v in sheet.row_values(i))
+                if row_text.strip():
+                    lines.append(row_text)
+    return "\n".join(lines)
+
+
 def index_single_file(path: str, filename: str) -> list[dict]:
     """Extrae texto, trocea y genera embeddings para un único archivo."""
     try:
@@ -269,6 +295,8 @@ def index_single_file(path: str, filename: str) -> list[dict]:
             text = extract_text_from_doc(path)
         elif filename.endswith(".md"):
             text = extract_text_from_md(path)
+        elif filename.endswith(".xlsx") or filename.endswith(".xls"):
+            text = extract_text_from_excel(path)
         else:
             return []
         chunks = chunking(text)
