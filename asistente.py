@@ -503,6 +503,7 @@ Reglas:
 - No inventes datos que no aparezcan en la transcripción.
 - Usa los cargos reales de GYC y menciona el ERP cuando sea relevante, nunca por su nombre comercial.
 - El diagrama_mermaid debe representar fielmente el flujo completo del procedimiento, incluyendo decisiones y caminos alternativos si los hay. Usa SIEMPRE "flowchart TD" (top-down, vertical). Incluye un nodo por cada subapartado del Desarrollo más los nodos de inicio y fin. Nunca uses flowchart LR ni diagramas de un solo nivel.
+- CRÍTICO para el diagrama_mermaid: pon SIEMPRE la etiqueta de cada nodo entre comillas dobles, sin excepción. Ejemplo correcto: A["Verificación de Necesidad (ERP / Dpto.)"]. Ejemplo incorrecto: A[Verificación de Necesidad (ERP / Dpto.)]. Esto evita errores de parseo con caracteres especiales como paréntesis, barras, tildes o comas. Nunca pongas saltos de línea (\n) dentro de las etiquetas.
 
 ## Reglas anti-sobrecompromiso (crítico para auditorías ISO)
 

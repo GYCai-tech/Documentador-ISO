@@ -462,6 +462,29 @@ def add_archivo(doc, data):
 PUPPETEER_CFG = os.path.join(HERE, "puppeteer_config.json")
 
 
+def _sanitize_mermaid(code: str) -> str:
+    """
+    Envuelve etiquetas de nodo sin comillas dobles para evitar errores de parseo
+    con caracteres especiales (tildes, paréntesis, barras, etc.).
+    Transforma  A[Texto con (especial)]  →  A["Texto con (especial)"]
+    en nodos rectangulares, redondeados, hexagonales y de decisión.
+    """
+    import re
+    # Formas: [texto], (texto), {texto}, ((texto)), [[texto]], [(texto)]
+    # Solo aplica cuando la etiqueta NO empieza ya con comilla doble
+    def quote_label(m: re.Match) -> str:
+        open_b, text, close_b = m.group(1), m.group(2), m.group(3)
+        if text.startswith('"') and text.endswith('"'):
+            return m.group(0)  # ya tiene comillas
+        # elimina \n literales dentro de la etiqueta
+        text = text.replace("\\n", " ").replace("\n", " ").strip()
+        return f'{open_b}"{text}"{close_b}'
+
+    # Cubre [ ], [[ ]], [( )], { }, (( )), ( ) — no toca IDs de nodo
+    pattern = r'(\[{1,2}\(?|\{{1,2}|\({1,2})([^"\]\)\}][^\]\)\}]*)(\)?\]{1,2}|\}{1,2}|\){1,2})'
+    return re.sub(pattern, quote_label, code)
+
+
 def render_mermaid(mermaid_code: str) -> str | None:
     """
     Renderiza código Mermaid a PNG usando mmdc (mermaid-cli).
@@ -471,7 +494,7 @@ def render_mermaid(mermaid_code: str) -> str | None:
     mmd = tempfile.NamedTemporaryFile(
         suffix=".mmd", dir=HERE, delete=False, encoding="utf-8", mode="w"
     )
-    mmd.write(mermaid_code)
+    mmd.write(_sanitize_mermaid(mermaid_code))
     mmd.close()
 
     png_path = mmd.name.replace(".mmd", ".png")
