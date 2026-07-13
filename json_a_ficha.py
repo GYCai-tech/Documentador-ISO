@@ -470,19 +470,63 @@ def _sanitize_mermaid(code: str) -> str:
     en nodos rectangulares, redondeados, hexagonales y de decisión.
     """
     import re
-    # Formas: [texto], (texto), {texto}, ((texto)), [[texto]], [(texto)]
-    # Solo aplica cuando la etiqueta NO empieza ya con comilla doble
+
+    # Paso 1: etiquetas que el LLM YA entrecomilló pero que contienen comillas
+    # internas sin escapar (p.ej. A["Registro de No Conformidad ("NC")"]).
+    # Mermaid corta la cadena en la primera comilla interna y el resto queda
+    # como sintaxis inválida, así que las sustituimos por comillas simples.
+    # El cierre debe corresponder EXACTAMENTE al tipo de apertura (más
+    # específico primero) para no emparejar p.ej. un "[" con un ")" y dejar
+    # basura suelta detrás del nodo.
+    def fix_inner_quotes(m: re.Match) -> str:
+        open_b, text, close_b = m.group(1), m.group(2), m.group(3)
+        text = text.replace('"', "'").replace("\\n", " ").replace("\n", " ").strip()
+        return f'{open_b}"{text}"{close_b}'
+
+    pairs = [
+        (r"\[\(", r"\)\]"),
+        (r"\[\[", r"\]\]"),
+        (r"\(\(", r"\)\)"),
+        (r"\[", r"\]"),
+        (r"\(", r"\)"),
+        (r"\{", r"\}"),
+    ]
+    for open_re, close_re in pairs:
+        quoted_pattern = rf'({open_re})"(.*?)"({close_re})'
+        code = re.sub(quoted_pattern, fix_inner_quotes, code)
+
+    # Paso 2: envuelve etiquetas SIN comillas. Formas: [texto], (texto), {texto},
+    # ((texto)), [[texto]], [(texto)] — no toca IDs de nodo.
+    #
+    # Los tramos "..." ya bien formados (arreglados en el paso 1 si hacía
+    # falta) se protegen primero con marcadores temporales. Si no se hiciera,
+    # cualquier paréntesis dentro de una etiqueta ya entrecomillada — p.ej.
+    # "Verificación de Necesidad (ERP / Dpto.)" — se confundiría con un nodo
+    # nuevo tipo (texto) y rompería la etiqueta.
+    placeholders: dict[str, str] = {}
+
+    def protect(m: re.Match) -> str:
+        key = f"\x00Q{len(placeholders)}\x00"
+        placeholders[key] = m.group(0)
+        return key
+
+    protected = re.sub(r'"[^"\n]*"', protect, code)
+
     def quote_label(m: re.Match) -> str:
         open_b, text, close_b = m.group(1), m.group(2), m.group(3)
-        if text.startswith('"') and text.endswith('"'):
-            return m.group(0)  # ya tiene comillas
+        if re.fullmatch(r"\x00Q\d+\x00", text):
+            return m.group(0)  # ya es una etiqueta protegida, no volver a envolver
         # elimina \n literales dentro de la etiqueta
         text = text.replace("\\n", " ").replace("\n", " ").strip()
         return f'{open_b}"{text}"{close_b}'
 
-    # Cubre [ ], [[ ]], [( )], { }, (( )), ( ) — no toca IDs de nodo
-    pattern = r'(\[{1,2}\(?|\{{1,2}|\({1,2})([^"\]\)\}][^\]\)\}]*)(\)?\]{1,2}|\}{1,2}|\){1,2})'
-    return re.sub(pattern, quote_label, code)
+    # \n excluido explícitamente para que la etiqueta nunca cruce de línea
+    pattern = r'(\[{1,2}\(?|\{{1,2}|\({1,2})([^"\]\)\}\n][^\]\)\}\n]*)(\)?\]{1,2}|\}{1,2}|\){1,2})'
+    protected = re.sub(pattern, quote_label, protected)
+
+    for key, val in placeholders.items():
+        protected = protected.replace(key, val)
+    return protected
 
 
 def render_mermaid(mermaid_code: str) -> str | None:
@@ -633,6 +677,22 @@ def generar_ficha(json_path):
     doc.save(out)
     print(f"Ficha generada: {out}")
     return out
+
+
+def convert_to_pdf(docx_path: str) -> str:
+    """Convierte un .docx a .pdf usando LibreOffice en modo headless.
+    Devuelve la ruta del PDF generado (mismo directorio, mismo nombre base)."""
+    out_dir = os.path.dirname(os.path.abspath(docx_path))
+    result = subprocess.run(
+        ["soffice", "--headless", "--convert-to", "pdf", "--outdir", out_dir, docx_path],
+        capture_output=True, text=True, timeout=120,
+    )
+    pdf_path = os.path.splitext(docx_path)[0] + ".pdf"
+    if result.returncode != 0 or not os.path.exists(pdf_path):
+        raise RuntimeError(
+            f"Error convirtiendo a PDF (código {result.returncode}): {result.stderr[:500]}"
+        )
+    return pdf_path
 
 
 if __name__ == "__main__":
