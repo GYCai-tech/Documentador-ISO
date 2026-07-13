@@ -99,10 +99,11 @@ Eres un consultor experto en calidad ISO integrado en el sistema documental de G
 
 1. Consulta los archivos de conocimiento antes de redactar cualquier sección para conocer el estilo, vocabulario y procedimientos relacionados de GYC. Imita ese estilo.
 2. Propón el código del procedimiento consultando los archivos de conocimiento para identificar el siguiente código disponible. Pide confirmación.
-3. Entrevista colaborativa — trabaja sección por sección en este orden. En cada sección:
-   - redacta el texto completo y definitivo tal como aparecerá en el documento,
-   - luego pregunta: "¿Es así, o lo ajustamos?"
-   - no avances hasta confirmar.
+3. Entrevista colaborativa — usa este orden como hilo conductor, pero no es una máquina de estados rígida:
+   - Para la sección que estés tratando, redacta el texto completo y definitivo tal como aparecerá en el documento, luego pregunta: "¿Es así, o lo ajustamos?"
+   - No avances a la siguiente sección hasta confirmar la actual.
+   - Si el usuario aporta información de otra sección (antes o después de la que estás tratando), acéptala y guárdala tal cual — no la descartes ni le pidas que la repita. Cuando llegues a esa sección, retómala, complétala si hace falta y confírmala normalmente; no dupliques la pregunta si ya te lo dijo.
+   - Si el usuario pide explícitamente cambiar el orden o saltar a otra sección, sigue su indicación.
 
 Orden de secciones:
 1. Código y nombre
@@ -145,7 +146,7 @@ Cuando trabajes la sección Responsabilidades:
 ## Comportamiento durante la entrevista
 
 - No hagas preguntas genéricas.
-- Guía la conversación sección por sección.
+- Guía la conversación sección por sección, pero sin obligar al usuario a seguir un orden estricto: si adelanta información de otra sección, apróvechala en vez de ignorarla o hacérsela repetir.
 - En cada sección propón siempre un borrador completo antes de preguntar.
 - Haz preguntas de profundización: "¿En qué plazo?", "¿Quién valida?", "¿Qué registro queda?", "¿Hay excepciones?".
 - Si el usuario confirma sin añadir nada, pregunta al menos una cosa más antes de avanzar para asegurarte de que no falta detalle.
@@ -698,3 +699,98 @@ def generate_docx(data: dict) -> str:
         os.unlink(tmp_path)
 
     return out_path
+
+
+def generate_pdf(docx_path: str) -> str:
+    """Convierte el .docx generado a .pdf (LibreOffice headless)."""
+    from json_a_ficha import convert_to_pdf
+    return convert_to_pdf(docx_path)
+
+
+def render_preview_markdown(data: dict) -> str:
+    """Construye una vista previa Markdown del procedimiento completo,
+    para que el usuario la revise en el chat antes de generar el .docx/.pdf finales."""
+    L = []
+    L.append(f"# {data.get('codigo', '')}: {data.get('nombre', '')}")
+    L.append(
+        f"*Revisión {data.get('revision', '')} — {data.get('fecha', '')} "
+        f"— {data.get('paginas', '')} páginas*"
+    )
+    L.append(
+        f"\nElaborado: **{data.get('elaborado_por', '')}**  \n"
+        f"Revisado y Aprobado: **{data.get('aprobado_por', '')}**"
+    )
+
+    historial = data.get("historial", [])
+    if historial:
+        L.append("\n## Control de revisiones")
+        L.append("| Rev | Fecha | Descripción | Revisado y aprobado | Elaborado |")
+        L.append("|---|---|---|---|---|")
+        for h in historial:
+            L.append(
+                f"| {h.get('rev', '')} | {h.get('fecha', '')} | {h.get('descripcion', '')} "
+                f"| {h.get('revisado', '')} | {h.get('elaborado', '')} |"
+            )
+
+    L.append("\n## 1. Objeto")
+    L.append(data.get("objeto", ""))
+
+    L.append("\n## 2. Alcance")
+    L.append(data.get("alcance", ""))
+
+    L.append("\n## 3. Definiciones y Abreviaturas")
+    definiciones = data.get("definiciones", [])
+    if definiciones:
+        for d in definiciones:
+            L.append(f"- **{d.get('termino', '')}**: {d.get('descripcion', '')}")
+    else:
+        L.append("*No aplica.*")
+
+    L.append("\n## 4. Responsabilidades")
+    responsabilidades = data.get("responsabilidades", [])
+    if responsabilidades:
+        for r in responsabilidades:
+            L.append(f"\n**{r.get('cargo', '')}**")
+            for t in r.get("tareas", []):
+                L.append(f"- {t}")
+    else:
+        L.append("*No aplica.*")
+
+    L.append("\n## 5. Desarrollo")
+    for item in data.get("desarrollo", []):
+        L.append(f"\n**{item.get('num', '')} {item.get('titulo', '')}**")
+        L.append(item.get("descripcion", ""))
+
+    L.append("\n## 6. Archivo")
+    archivo = data.get("archivo", [])
+    if archivo:
+        L.append("| Documento | Responsable | Lugar |")
+        L.append("|---|---|---|")
+        for a in archivo:
+            L.append(f"| {a.get('documento', '')} | {a.get('responsable', '')} | {a.get('lugar', '')} |")
+    else:
+        L.append("*No aplica.*")
+
+    L.append("\n## 7. Diagrama de Flujo")
+    if data.get("diagrama_mermaid", "").strip():
+        L.append("*(se generará como imagen en el documento final)*")
+    else:
+        L.append("*No se ha definido diagrama de flujo.*")
+
+    L.append("\n## 8. Referencias")
+    referencias = data.get("referencias", [])
+    if referencias:
+        for r in referencias:
+            L.append(f"- {r}")
+    else:
+        L.append("*No aplica.*")
+
+    L.append("\n## 9. Anexos")
+    anexos = data.get("anexos", [])
+    if anexos:
+        for a in anexos:
+            L.append(f"- {a}")
+    else:
+        L.append("*No aplica.*")
+
+    return "\n".join(L)
