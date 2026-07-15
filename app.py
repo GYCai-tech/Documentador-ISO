@@ -8,10 +8,11 @@ from chainlit.input_widget import TextInput
 from asistente import (
     load_index, save_index, retrieve,
     extract_text_from_docx, extract_text_from_pdf, extract_text_from_md,
+    extract_revision_from_docx,
     index_single_file, chunking, generate_embeddings,
     init_interview, continue_interview, transcript_from_log,
     init_edit_interview,
-    draft_procedure, add_defaults, generate_docx,
+    draft_procedure, add_defaults, generate_docx, generate_pdf, render_preview_markdown,
     SYSTEM_PROMPT, SYSTEM_PROMPT_EXPRESS, DRAFT_SYSTEM_PROMPT, EDIT_SYSTEM_PROMPT,
 )
 from auditoria import registrar_generacion
@@ -133,7 +134,7 @@ async def on_message(msg: cl.Message):
     elif phase in ("upload", "drafting", "processing"):
         await cl.Message(content="Por favor, espera a que termine la operación actual.").send()
 
-    elif phase in ("menu", "mode_select"):
+    elif phase in ("menu", "mode_select", "preview"):
         await cl.Message(content="Por favor, selecciona una opción con los botones de arriba.").send()
 
     elif phase == "idle":
@@ -178,9 +179,8 @@ async def on_action_revisar(action: cl.Action):
     f = uploaded[0]
     doc_text = await asyncio.to_thread(extract_text_from_docx, f.path)
 
-    import re
-    rev_match = re.search(r'[Rr]ev(?:isi[oó]n)?\.?\s*[:.]?\s*(\d{2})', doc_text)
-    cl.user_session.set("edit_revision", rev_match.group(1) if rev_match else None)
+    current_revision = await asyncio.to_thread(extract_revision_from_docx, f.path)
+    cl.user_session.set("edit_revision", current_revision)
     cl.user_session.set("edit_mode", True)
     cl.user_session.set("topic", f.name)
 
@@ -419,16 +419,15 @@ async def handle_upload():
 
 
 async def generate_and_deliver():
+    """Redacta el borrador con Gemini y muestra una preview completa para su aprobación,
+    antes de generar los archivos .docx/.pdf finales."""
     cl.user_session.set("phase", "drafting")
 
     log                 = cl.user_session.get("log")
     rag_context         = cl.user_session.get("rag_context", "")
     transcript          = transcript_from_log(log)
     draft_system_prompt = cl.user_session.get("draft_system_prompt", DRAFT_SYSTEM_PROMPT)
-    tema                = cl.user_session.get("topic", "")
     index               = cl.user_session.get("rag_index", [])
-    user                = cl.user_session.get("user")
-    username            = user.identifier if user else "anónimo"
 
     status = await cl.Message(content="Redactando procedimiento ISO, un momento...").send()
 
@@ -447,7 +446,8 @@ async def generate_and_deliver():
         try:
             data = await asyncio.to_thread(draft_procedure, transcript, rag_context, draft_system_prompt)
             break
-        except Exception:
+        except Exception as e:
+            print(f"[draft_procedure] intento {attempt + 1} fallido: {e}")
             if attempt == 0:
                 status.content = "Error en la generación, reintentando..."
                 await status.update()
@@ -458,25 +458,87 @@ async def generate_and_deliver():
         cl.user_session.set("phase", "interview")
         return
 
-    data         = add_defaults(data)
+    data          = add_defaults(data)
     edit_revision = cl.user_session.get("edit_revision")
     if edit_revision is not None:
-        data["revision"] = edit_revision
-    out_path = await asyncio.to_thread(generate_docx, data)
+        # El documento editado avanza a la siguiente revisión, no reutiliza la actual.
+        data["revision"] = f"{int(edit_revision) + 1:02d}"
+    cl.user_session.set("draft_data", data)
 
     codigo = data.get("codigo", "PC-XX")
     nombre = data.get("nombre", "")
+
+    status.content = f"Borrador de **{codigo} — {nombre}** listo. Revisa la preview antes de generar los archivos:"
+    await status.update()
+
+    cl.user_session.set("phase", "preview")
+    await cl.Message(
+        content=render_preview_markdown(data),
+        actions=[
+            cl.Action(name="action_generar_final", payload={"value": "generar"}, label="✓ Generar documento final"),
+            cl.Action(name="action_pedir_cambios",  payload={"value": "cambios"}, label="✏️ Pedir cambios"),
+        ],
+    ).send()
+
+
+@cl.action_callback("action_generar_final")
+async def on_action_generar_final(action: cl.Action):
+    if cl.user_session.get("phase") != "preview":
+        await action.remove()
+        return
+    await action.remove()
+    await _finalize_and_deliver()
+
+
+@cl.action_callback("action_pedir_cambios")
+async def on_action_pedir_cambios(action: cl.Action):
+    if cl.user_session.get("phase") != "preview":
+        await action.remove()
+        return
+    await action.remove()
+    cl.user_session.set("phase", "interview")
+    await cl.Message(content="Indica qué cambios quieres hacer y seguimos ajustando el procedimiento.").send()
+
+
+async def _finalize_and_deliver():
+    cl.user_session.set("phase", "drafting")
+
+    data     = cl.user_session.get("draft_data")
+    tema     = cl.user_session.get("topic", "")
+    user     = cl.user_session.get("user")
+    username = user.identifier if user else "anónimo"
+
+    codigo = data.get("codigo", "PC-XX")
+    nombre = data.get("nombre", "")
+
+    status = await cl.Message(content="Generando documento Word y PDF...").send()
+
+    out_path = await asyncio.to_thread(generate_docx, data)
+
+    pdf_path = None
+    try:
+        pdf_path = await asyncio.to_thread(generate_pdf, out_path)
+    except Exception as e:
+        print(f"[pdf] Error generando PDF: {e}")
 
     await asyncio.to_thread(registrar_generacion, codigo, nombre, tema, out_path, username)
 
     status.content = f"Procedimiento **{codigo} — {nombre}** generado correctamente."
     await status.update()
 
+    elements = [cl.File(name=os.path.basename(out_path), path=out_path)]
+    if pdf_path:
+        elements.append(cl.File(name=os.path.basename(pdf_path), path=pdf_path))
+    else:
+        status.content += "\n\n*No se pudo generar el PDF; se entrega solo el Word.*"
+        await status.update()
+
     await cl.Message(
         content="Tu procedimiento está listo:",
-        elements=[cl.File(name=os.path.basename(out_path), path=out_path)]
+        elements=elements,
     ).send()
 
     cl.user_session.set("phase", "idle")
     cl.user_session.set("edit_mode", False)
     cl.user_session.set("edit_revision", None)
+    cl.user_session.set("draft_data", None)

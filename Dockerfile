@@ -3,13 +3,18 @@
 
 FROM python:3.11-slim
 
+# mermaid-cli usa el Chromium del sistema (ver puppeteer_config.json), no el suyo propio
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+
 # Instala dependencias del sistema si las necesitas (ej: para python-docx)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    unzip \
     nodejs \
     npm \
     chromium \
     antiword \
+    libreoffice-writer \
     && rm -rf /var/lib/apt/lists/* \
     && npm install -g @mermaid-js/mermaid-cli \
     && mmdc --version

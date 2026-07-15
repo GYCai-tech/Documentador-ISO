@@ -342,7 +342,7 @@ def add_tabla_metadatos(doc, data):
 def add_indice(doc, data):
     add_section_title(doc, "ÍNDICE")
 
-    secciones_fijas = ["Objeto.", "Alcance.", "Definiciones y Abreviaturas.", "Responsabilidades."]
+    secciones_fijas = ["Objeto.", "Alcance.", "Definiciones y Abreviaturas.", "Responsabilidades.", "Entradas y Salidas."]
     desarrollo_items = data.get("desarrollo", [])
     secciones_post   = ["Archivo.", "Diagrama de Flujo.", "Referencias.", "Anexos."]
 
@@ -416,6 +416,32 @@ def add_responsabilidades(doc, data):
             p_t = doc.add_paragraph()
             add_run(p_t, f"• {tarea}", size_pt=12)
             set_spacing(p_t, before=0, after=40)
+    blank(doc)
+
+
+def add_entradas_salidas(doc, data):
+    add_section_title(doc, "ENTRADAS Y SALIDAS")
+    entradas = data.get("entradas", [])
+    salidas  = data.get("salidas", [])
+    if entradas or salidas:
+        p = doc.add_paragraph()
+        add_run(p, "Entradas", bold=True, size_pt=12)
+        set_spacing(p, before=0, after=20)
+        for e in entradas:
+            p = doc.add_paragraph()
+            add_run(p, f"• {e}", size_pt=12)
+            set_spacing(p, before=0, after=40)
+
+        p = doc.add_paragraph()
+        add_run(p, "Salidas", bold=True, size_pt=12)
+        set_spacing(p, before=80, after=20)
+        for s in salidas:
+            p = doc.add_paragraph()
+            add_run(p, f"• {s}", size_pt=12)
+            set_spacing(p, before=0, after=40)
+    else:
+        p = doc.add_paragraph()
+        add_run(p, "No aplica.", italic=True, size_pt=12)
     blank(doc)
 
 
@@ -665,6 +691,7 @@ def generar_ficha(json_path):
     add_alcance(doc, data)
     add_definiciones(doc, data)
     add_responsabilidades(doc, data)
+    add_entradas_salidas(doc, data)
     add_desarrollo(doc, data)
     add_archivo(doc, data)
     add_diagrama(doc, data)

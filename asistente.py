@@ -3,6 +3,7 @@
 
 import os
 import json
+import re
 import time
 from datetime import datetime, timezone
 import numpy as np
@@ -54,6 +55,8 @@ class ProcedimientoBase(BaseModel):
     objeto: str
     alcance: str
     definiciones: list[Definicion]
+    entradas: list[str]
+    salidas: list[str]
     desarrollo: list[ApartadoDesarrollo]
     archivo: list[RegistroArchivo]
     referencias: list[str]
@@ -116,6 +119,10 @@ Orden de secciones:
 8. Archivo
 9. Referencias
 10. Anexos
+
+### Instrucciones específicas para la sección Entradas y salidas
+
+Identifica qué documentos, materiales, solicitudes o información **entran** al proceso (y de dónde vienen) y qué se **produce** como resultado (documentos, registros, productos...). Redacta cada entrada y cada salida como un elemento breve y concreto (no como párrafos narrativos); no repitas aquí el desarrollo completo del proceso.
 
 ### Instrucciones específicas para la sección Responsabilidades
 
@@ -550,6 +557,8 @@ Reglas:
 - Las responsabilidades se generan en un paso separado a partir del Desarrollo; no las incluyas ni las menciones en tu redacción.
 - Objeto y Alcance: redáctalos con suficiente contexto para que alguien ajeno a la empresa entienda el propósito y límites del procedimiento.
 - Definiciones: incluye todas las siglas, términos técnicos y nombres de sistemas mencionados en la transcripción.
+- Entradas y salidas: lista breve de elementos concretos (no prosa), a partir de lo que la transcripción indique que entra y sale del proceso. No inventes elementos que no se hayan mencionado.
+- Historial (control de revisiones): si la transcripción incluye un documento original (modo edición), conserva sus entradas de historial ya existentes en el mismo orden y añade una única fila nueva describiendo esta revisión. Si es un procedimiento nuevo, incluye solo una entrada: rev "00", la fecha de la entrevista y la descripción "Emisión inicial del procedimiento.". No inventes revisiones anteriores que no se hayan mencionado.
 - No inventes datos que no aparezcan en la transcripción.
 - Usa los cargos reales de GYC y menciona el ERP cuando sea relevante, nunca por su nombre comercial.
 - El diagrama_mermaid debe representar fielmente el flujo completo del procedimiento, incluyendo decisiones y caminos alternativos si los hay. Usa SIEMPRE "flowchart TD" (top-down, vertical). Incluye un nodo por cada subapartado del Desarrollo más los nodos de inicio y fin. Nunca uses flowchart LR ni diagramas de un solo nivel.
@@ -679,7 +688,36 @@ def add_defaults(data: dict) -> dict:
         "aprobado_por":  "Gerencia",
         "fecha":         today,
     }
-    return {**data, **overrides}
+    result = {**data, **overrides}
+    # El "Revisado y Aprobado"/"Elaborado" de cada fila del historial también son
+    # siempre Gerencia/Responsable de Calidad — no se dejan a criterio del modelo.
+    result["historial"] = [
+        {**entry, "elaborado": overrides["elaborado_por"], "revisado": overrides["aprobado_por"]}
+        for entry in result.get("historial", [])
+    ]
+    return result
+
+
+_REVISION_RE = re.compile(r'[Rr]ev(?:isi[oó]n)?\.?\s*[:.]?\s*(\d{2})', re.IGNORECASE)
+
+
+def extract_revision_from_docx(path: str) -> str | None:
+    """Lee la revisión vigente de un procedimiento ya generado por este sistema.
+    El valor fiable es el del footer ("Rev: XX", ver json_a_ficha.update_footer),
+    que python-docx no expone a través de doc.tables/doc.paragraphs. Si el
+    documento no sigue esa plantilla, cae a un regex sobre el cuerpo y toma
+    la revisión más alta encontrada (evita quedarse con la primera fila del
+    historial, que suele ser la más antigua)."""
+    doc = DocxReader(path)
+    for section in doc.sections:
+        for tbl in section.footer.tables:
+            for row in tbl.rows:
+                for cell in row.cells:
+                    m = _REVISION_RE.search(cell.text)
+                    if m:
+                        return m.group(1)
+    matches = _REVISION_RE.findall(extract_text_from_docx(path))
+    return max(matches) if matches else None
 
 
 def generate_docx(data: dict) -> str:
@@ -756,12 +794,25 @@ def render_preview_markdown(data: dict) -> str:
     else:
         L.append("*No aplica.*")
 
-    L.append("\n## 5. Desarrollo")
+    L.append("\n## 5. Entradas y Salidas")
+    entradas = data.get("entradas", [])
+    salidas  = data.get("salidas", [])
+    if entradas or salidas:
+        L.append("\n**Entradas**")
+        for e in entradas:
+            L.append(f"- {e}")
+        L.append("\n**Salidas**")
+        for s in salidas:
+            L.append(f"- {s}")
+    else:
+        L.append("*No aplica.*")
+
+    L.append("\n## 6. Desarrollo")
     for item in data.get("desarrollo", []):
         L.append(f"\n**{item.get('num', '')} {item.get('titulo', '')}**")
         L.append(item.get("descripcion", ""))
 
-    L.append("\n## 6. Archivo")
+    L.append("\n## 7. Archivo")
     archivo = data.get("archivo", [])
     if archivo:
         L.append("| Documento | Responsable | Lugar |")
@@ -771,13 +822,13 @@ def render_preview_markdown(data: dict) -> str:
     else:
         L.append("*No aplica.*")
 
-    L.append("\n## 7. Diagrama de Flujo")
+    L.append("\n## 8. Diagrama de Flujo")
     if data.get("diagrama_mermaid", "").strip():
         L.append("*(se generará como imagen en el documento final)*")
     else:
         L.append("*No se ha definido diagrama de flujo.*")
 
-    L.append("\n## 8. Referencias")
+    L.append("\n## 9. Referencias")
     referencias = data.get("referencias", [])
     if referencias:
         for r in referencias:
@@ -785,7 +836,7 @@ def render_preview_markdown(data: dict) -> str:
     else:
         L.append("*No aplica.*")
 
-    L.append("\n## 9. Anexos")
+    L.append("\n## 10. Anexos")
     anexos = data.get("anexos", [])
     if anexos:
         for a in anexos:
