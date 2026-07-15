@@ -339,10 +339,42 @@ def add_tabla_metadatos(doc, data):
     blank(doc)
 
 
+def secciones_previas(data):
+    """Secciones del indice anteriores a Desarrollo. Definiciones es opcional."""
+    secs = ["Objeto.", "Alcance."]
+    if data.get("definiciones"):
+        secs.append("Definiciones y Abreviaturas.")
+    secs.append("Responsabilidades.")
+    return secs
+
+
+def validar_numeracion(data):
+    """
+    Comprueba que los apartados del desarrollo empiecen por el numero que el
+    indice asigna a la seccion Desarrollo.
+
+    Si el JSON numera "7.1" mientras el indice dice "5. Desarrollo", el
+    documento sale con el indice y el cuerpo descuadrados y nadie lo detecta
+    hasta que lo lee un auditor.
+    """
+    n_desarrollo = len(secciones_previas(data)) + 1
+    esperado = f"{n_desarrollo}."
+    malos = [it.get("num", "") for it in data.get("desarrollo", [])
+             if not str(it.get("num", "")).startswith(esperado)]
+    if malos:
+        print(f"[AVISO] El indice numerara la seccion como '{n_desarrollo}. Desarrollo' "
+              f"pero el desarrollo usa: {', '.join(malos)}.")
+        print(f"[AVISO] El indice y el cuerpo quedaran descuadrados. "
+              f"Renumera los apartados como {esperado}1, {esperado}2, ...")
+    return not malos
+
+
 def add_indice(doc, data):
     add_section_title(doc, "ÍNDICE")
 
-    secciones_fijas = ["Objeto.", "Alcance.", "Responsabilidades."]
+    validar_numeracion(data)
+
+    secciones_fijas = secciones_previas(data)
     desarrollo_items = data.get("desarrollo", [])
     secciones_post   = ["Archivo.", "Diagrama de Flujo.", "Referencias.", "Anexos."]
 
@@ -386,6 +418,24 @@ def add_alcance(doc, data):
     add_run(p, data["alcance"], size_pt=12)
     set_align(p, WD_ALIGN_PARAGRAPH.JUSTIFY)
     set_spacing(p, before=60, after=60)
+    blank(doc)
+
+
+def add_definiciones(doc, data):
+    """
+    Seccion opcional. Solo se emite si el JSON trae "definiciones".
+    El formato de GYC la situa como seccion 3, entre ALCANCE y RESPONSABILIDADES.
+    """
+    definiciones = data.get("definiciones", [])
+    if not definiciones:
+        return
+    add_section_title(doc, "DEFINICIONES Y ABREVIATURAS")
+    for d in definiciones:
+        p = doc.add_paragraph()
+        add_run(p, f"{d['termino']}: ", bold=True, size_pt=12)
+        add_run(p, d["definicion"], size_pt=12)
+        set_align(p, WD_ALIGN_PARAGRAPH.JUSTIFY)
+        set_spacing(p, before=20, after=20)
     blank(doc)
 
 
@@ -478,6 +528,29 @@ def render_mermaid(mermaid_code: str) -> str | None:
     return None
 
 
+DIAGRAMA_ANCHO_MAX_CM = 15.0
+DIAGRAMA_ALTO_MAX_CM  = 19.0   # alto util restante tras cabecera y pie de pagina
+
+
+def insertar_diagrama(p, png_path):
+    """
+    Inserta el PNG conservando su proporcion y sin desbordar la pagina.
+
+    Fijar solo el ancho (15 cm) desborda con los diagramas verticales: uno de
+    proporcion 1:3,45 pasa a medir 51 cm de alto en una hoja de 29,7. Al
+    reajustarlo despues a mano en Word se rompe la proporcion y el texto sale
+    estirado. Aqui se escala por el lado que limite.
+    """
+    shape = p.add_run().add_picture(png_path)
+    ratio = shape.height / shape.width          # alto/ancho nativo
+    ancho_cm = DIAGRAMA_ANCHO_MAX_CM
+    if ancho_cm * ratio > DIAGRAMA_ALTO_MAX_CM:
+        ancho_cm = DIAGRAMA_ALTO_MAX_CM / ratio
+    shape.width  = Cm(ancho_cm)
+    shape.height = Cm(ancho_cm * ratio)
+    return ancho_cm, ancho_cm * ratio
+
+
 def add_diagrama(doc, data=None):
     add_section_title(doc, "DIAGRAMA DE FLUJO")
 
@@ -490,7 +563,12 @@ def add_diagrama(doc, data=None):
             print("OK")
             p = doc.add_paragraph()
             set_align(p, WD_ALIGN_PARAGRAPH.CENTER)
-            p.add_run().add_picture(png_path, width=Cm(15))
+            w, h = insertar_diagrama(p, png_path)
+            print(f"[Diagrama] Insertado a {w:.1f} x {h:.1f} cm")
+            if w < 7.0:
+                print("[Diagrama] AVISO: el diagrama es muy alto y estrecho, "
+                      "quedara con letra pequena. Compacta el flujo o divide "
+                      "el diagrama en dos.")
             set_spacing(p, before=60, after=60)
             os.unlink(png_path)
             blank(doc)
@@ -567,6 +645,7 @@ def generar_ficha(json_path):
     add_indice(doc, data)
     add_objeto(doc, data)
     add_alcance(doc, data)
+    add_definiciones(doc, data)
     add_responsabilidades(doc, data)
     add_desarrollo(doc, data)
     add_archivo(doc, data)
